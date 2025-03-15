@@ -11,8 +11,8 @@ def SRT(X, y):
 
     Parameters
     ----------
-    X: matrix
-       input data (n_data = X.shape[0], p = X.shape[1])
+    X: matrix of size n_data x p
+       number of data points: n_data = X.shape[0], number of variables: p = X.shape[1]
 
     y: vector
        target values
@@ -21,10 +21,10 @@ def SRT(X, y):
     -------
 
        symbolic regression tree
-
     """
+
     # Hyperparameters
-    depth = 3  ###
+    depth = 3  # the depth of the tree
     eps = 1e-6
     c_lo = min(-100, np.min(X))
     c_up = max(100, np.max(X))
@@ -89,7 +89,7 @@ def SRT(X, y):
     @m.Constraint(NnotT)
     def tdc23a_rule(m, n):
         """
-        if an operator (binary or unary) is assigned to node n, then the right node (2*n+1) must exist
+        If an operator (binary or unary) is assigned to node n, then the right node (2*n+1) must exist
 
         Parameters
         ----------
@@ -112,7 +112,7 @@ def SRT(X, y):
     @m.Constraint(NnotT)
     def tdc23b_rule(m, n):
         """
-        if a binary operator is assigned to node n, then the left node (2*n) must exist
+        If a binary operator is assigned to node n, then the left node (2*n) must exist
 
         Parameters
         ----------
@@ -175,8 +175,8 @@ def SRT(X, y):
     @m.Constraint(n_data_set, N)
     def vdc24a_rule(m, i, n):
         """
-        if a variable is assigned to node n, then return the value of the variable.
-        if a variable is not assigned to node n, then let the value of the node range between the bounds v_lo and v_up.
+        If a variable is assigned to node n, then return the value of the variable.
+        If a variable is not assigned to node n, then let the value of the node range between the bounds v_lo and v_up.
 
         Parameters
         ----------
@@ -202,8 +202,8 @@ def SRT(X, y):
     def vdc24b_rule(m, i, n):
         """
            Completing the previous constraint.
-           if a variable is assigned to node n, then return the value of the variable.
-           if a variable is not assigned to node n, then let the value of the node range between the bounds v_lo and v_up.
+           If a variable is assigned to node n, then return the value of the variable.
+           If a variable is not assigned to node n, then let the value of the node range between the bounds v_lo and v_up.
 
         Parameters
         ----------
