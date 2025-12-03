@@ -3,6 +3,7 @@ import pandas as pd
 import pyomo.environ as pyo
 from symbolic_regression import SymbolicRegressionModel
 import os
+import matplotlib.pyplot as plt
 
 # from utils import get_gurobi
 
@@ -117,3 +118,17 @@ if __name__ == "__main__":
     mdl.constant_val.pprint()
     print(mdl.get_parity_plot_data())
     print(mdl.get_selected_operators())
+
+    parity_data = mdl.get_parity_plot_data()
+    plt.scatter(parity_data["sim_data"], parity_data["prediction"])
+    plt.plot(
+        [parity_data["sim_data"].min(), parity_data["sim_data"].max()],
+        [parity_data["sim_data"].min(), parity_data["sim_data"].max()],
+        "k--",
+    )
+    plt.xlabel("Actual")
+    plt.ylabel("Predictions")
+    plt.title(f"{experiment_name}")
+    plt.tight_layout()
+    os.makedirs("Parities_train", exist_ok=True)
+    plt.savefig(f"Parities_train/parity_train_{experiment_name}.png")
