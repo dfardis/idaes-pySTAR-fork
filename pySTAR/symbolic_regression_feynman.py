@@ -4,6 +4,7 @@ import pyomo.environ as pyo
 from symbolic_regression import SymbolicRegressionModel
 import os
 import matplotlib.pyplot as plt
+import sympy as sp
 
 # from utils import get_gurobi
 
@@ -88,12 +89,12 @@ def build_model():
         input_columns=input_cols,
         output_column=output_col,
         tree_depth=depth,
-        operators=["sum", "diff", "mult"],  # "div", "square", "sqrt"],
+        operators=["sum", "diff", "mult", "div", "square", "sqrt"],
         var_bounds=(-100, 100),
         constant_bounds=(-100, 100),
         model_type=model_type,
     )
-    m.add_objective()
+    m.add_objective(fitness_metric)
 
     return m
 
@@ -117,9 +118,10 @@ if __name__ == "__main__":
 
     mdl.constant_val.pprint()
     print(mdl.get_parity_plot_data())
-    print(mdl.get_selected_operators())
+    print("Assigned operators to nodes: ", mdl.get_selected_operators())
 
     parity_data = mdl.get_parity_plot_data()
+    plt.figure(figsize=(8, 6))
     plt.scatter(parity_data["sim_data"], parity_data["prediction"])
     plt.plot(
         [parity_data["sim_data"].min(), parity_data["sim_data"].max()],
@@ -132,3 +134,30 @@ if __name__ == "__main__":
     plt.tight_layout()
     os.makedirs("Parities_train", exist_ok=True)
     plt.savefig(f"Parities_train/parity_train_{experiment_name}.png")
+    plt.close()
+
+    expr = mdl.selected_tree_to_expression()
+    expr = expr.sympy_expression
+    print("SR model:", expr)
+
+    feature_vars = [sp.Symbol(f"x{i}") for i in range(1, len(X_test_df.columns) + 1)]
+    SR_model = sp.lambdify(feature_vars, expr, modules="numpy")
+
+    # Make predictions on the test data
+    test_predictions = np.array([SR_model(*row) for row in X_test_df.to_numpy()])
+    test_actuals = y_test_df.values.flatten()
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(test_actuals, test_predictions)
+    plt.plot(
+        [test_actuals.min(), test_actuals.max()],
+        [test_actuals.min(), test_actuals.max()],
+        "k--",
+    )
+    plt.xlabel("Actual")
+    plt.ylabel("Predictions")
+    plt.title(f"{experiment_name}")
+    plt.tight_layout()
+    os.makedirs("Parities_test", exist_ok=True)
+    plt.savefig(f"Parities_test/parity_test_{experiment_name}.png")
+    plt.close()
