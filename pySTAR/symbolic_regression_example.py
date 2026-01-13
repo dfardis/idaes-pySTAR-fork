@@ -47,6 +47,7 @@ if __name__ == "__main__":
         solver = pyo.SolverFactory("baron")
         solver.solve(mdl, tee=True)
 
-    mdl.constant_val.pprint()
-    print(mdl.get_parity_plot_data())
-    print(mdl.get_selected_operators())
+    et = mdl.selected_tree_to_expression()
+    print("Expression: ", et)
+    print("R2 value ", mdl.compute_r2())
+    print("Constant values: ", et.cst_values)
