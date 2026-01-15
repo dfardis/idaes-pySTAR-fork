@@ -378,6 +378,7 @@ if __name__ == "__main__":
             "SR_model": [str(SR_model)],
             "constant_values": [constant_values_str],
             "nodes_assignments": [str(selected_operators)],
+            "var_bounds": [f"({v_lo}, {v_up})"],
         }
     )
 
