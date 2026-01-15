@@ -22,6 +22,10 @@ with open("solver.txt", "r") as file:
     solver = file.read().strip()
 print("Solver used to solve the MINLP =", solver)
 
+with open("max_time.txt", "r") as file:
+    max_time = file.read().strip()
+print("Maximum time allowed for solver to run =", max_time)
+
 with open("number_of_samples.txt", "r") as file:
     number_of_samples = int(file.read().strip())
 print("Number of samples =", number_of_samples)
@@ -34,9 +38,9 @@ with open("max_depth.txt", "r") as file:
     depth = int(file.read().strip())
 print("Maximum depth of tree =", depth)
 
-experiment_name = f"{dataset_name}_{model_type}_{fitness_metric}_{solver}_maxdepth{depth}_samples{number_of_samples}"
+experiment_name = f"{dataset_name}_{model_type}_{fitness_metric}_{solver}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
 
-df = pd.read_csv(f"Feynman_maxdepth3/{dataset_name}", sep="\t")
+df = pd.read_csv(f"Feynman_all_depths/{dataset_name}", sep="\t")
 X_df = df.iloc[:, :-1]
 y_df = df.iloc[
     :, [-1]
@@ -87,8 +91,8 @@ output_col = y_train_df.columns[0]
 print(data)
 
 # Compute variable bounds from training data
-v_lo = min(-100, X_train_df.min().min(), y_train_df.min().min())
-v_up = max(100, X_train_df.max().max(), y_train_df.max().max())
+v_lo = min(-100, X_train_df.min().min() - 1, y_train_df.min().min() - 1)
+v_up = max(100, X_train_df.max().max() + 1, y_train_df.max().max() + 1)
 print(f"Variable bounds: v_lo = {v_lo}, v_up = {v_up}")
 
 
@@ -98,7 +102,7 @@ def build_model():
         input_columns=input_cols,
         output_column=output_col,
         tree_depth=depth,
-        operators=["sum", "diff", "mult", "div", "square", "sqrt"],
+        operators=["sum", "diff", "mult", "div", "square", "sqrt", "exp", "log"],
         var_bounds=(v_lo, v_up),
         constant_bounds=(-100, 100),
         model_type=model_type,
@@ -114,12 +118,168 @@ if __name__ == "__main__":
     # mdl.add_tree_size_constraint(3)
 
     if solver == "scip":
-        solver = pyo.SolverFactory("scip")
-        solver.solve(mdl, tee=True)
+        os.makedirs("Results/scip_model_MINLP", exist_ok=True)
+        os.makedirs("Results/scip_res_MINLP", exist_ok=True)
+        os.makedirs("Results/scip_lst_MINLP", exist_ok=True)
+        os.makedirs("Results/scip_results_stats_MINLP", exist_ok=True)
+        os.makedirs("Results/scip_solver_log_MINLP", exist_ok=True)
+
+        solver = pyo.SolverFactory("gams")
+
+        # Capture SCIP solver output to a file
+        import sys
+
+        scip_logfile = f"Results/scip_solver_log_MINLP/scip_log_{experiment_name}.log"
+
+        with open(scip_logfile, "w") as log_f:
+            # Redirect stdout to capture solver output
+            old_stdout = sys.stdout
+            sys.stdout = log_f
+
+            results = solver.solve(
+                mdl,
+                solver="scip",
+                tee=True,  # This will write to our redirected stdout
+                symbolic_solver_labels=True,
+                keepfiles=True,
+                tmpdir="Results/scip_temp",
+                add_options=[f"option reslim= {max_time};"],  # in seconds
+            )
+
+            # Restore stdout
+            sys.stdout = old_stdout
+
+        # Also print to console
+        print(f"SCIP solver log saved to {scip_logfile}")
+
+        # Copy GAMS/SCIP output files from temp directory to desired location
+        import glob
+        import shutil
+
+        temp_dir = "Results/scip_temp"
+        if os.path.exists(temp_dir):
+            # Copy GAMS model file
+            gms_files = glob.glob(os.path.join(temp_dir, "*.gms"))
+            if gms_files:
+                latest_gms = max(gms_files, key=os.path.getmtime)
+                dest_gms = f"Results/scip_model_MINLP/model_{experiment_name}.gms"
+                shutil.copy2(latest_gms, dest_gms)
+                print(f"Copied GAMS model to {dest_gms}")
+
+            # Copy listing file
+            lst_files = glob.glob(os.path.join(temp_dir, "*.lst"))
+            if lst_files:
+                latest_lst = max(lst_files, key=os.path.getmtime)
+                dest_lst = f"Results/scip_lst_MINLP/lst_{experiment_name}.lst"
+                shutil.copy2(latest_lst, dest_lst)
+                print(f"Copied GAMS listing to {dest_lst}")
+
+            # Copy solution file
+            sol_files = glob.glob(os.path.join(temp_dir, "*.sol"))
+            if sol_files:
+                latest_sol = max(sol_files, key=os.path.getmtime)
+                dest_sol = f"Results/scip_res_MINLP/res_{experiment_name}.sol"
+                shutil.copy2(latest_sol, dest_sol)
+                print(f"Copied solution file to {dest_sol}")
+
+            # Copy results.dat if it exists
+            results_dat = os.path.join(temp_dir, "results.dat")
+            if os.path.exists(results_dat):
+                dest_res = f"Results/scip_res_MINLP/results_{experiment_name}.dat"
+                shutil.copy2(results_dat, dest_res)
+                print(f"Copied results.dat to {dest_res}")
+
+            # Copy resultsstat.dat if it exists
+            resultsstat_dat = os.path.join(temp_dir, "resultsstat.dat")
+            if os.path.exists(resultsstat_dat):
+                dest_stats = (
+                    f"Results/scip_results_stats_MINLP/stats_{experiment_name}.dat"
+                )
+                shutil.copy2(resultsstat_dat, dest_stats)
+                print(f"Copied resultsstat.dat to {dest_stats}")
 
     elif solver == "gurobi":
+        os.makedirs("Results/gurobi_model_MINLP", exist_ok=True)
+        os.makedirs("Results/gurobi_res_MINLP", exist_ok=True)
+        os.makedirs("Results/gurobi_lst_MINLP", exist_ok=True)
+        os.makedirs("Results/gurobi_results_stats_MINLP", exist_ok=True)
+        os.makedirs("Results/gurobi_solver_log_MINLP", exist_ok=True)
+
         solver = pyo.SolverFactory("gams")
-        solver.solve(mdl, solver="gurobi", tee=True)
+
+        # Capture GUROBI solver output to a file
+        import sys
+
+        gurobi_logfile = (
+            f"Results/gurobi_solver_log_MINLP/gurobi_log_{experiment_name}.log"
+        )
+
+        with open(gurobi_logfile, "w") as log_f:
+            # Redirect stdout to capture solver output
+            old_stdout = sys.stdout
+            sys.stdout = log_f
+
+            results = solver.solve(
+                mdl,
+                solver="gurobi",
+                tee=True,  # This will write to our redirected stdout
+                symbolic_solver_labels=True,
+                keepfiles=True,
+                tmpdir="Results/gurobi_temp",
+                add_options=[f"option reslim= {max_time};"],  # in seconds
+            )
+
+            # Restore stdout
+            sys.stdout = old_stdout
+
+        # Also print to console
+        print(f"GUROBI solver log saved to {gurobi_logfile}")
+
+        # Copy GAMS/GUROBI output files from temp directory to desired location
+        import glob
+        import shutil
+
+        temp_dir = "Results/gurobi_temp"
+        if os.path.exists(temp_dir):
+            # Copy GAMS model file
+            gms_files = glob.glob(os.path.join(temp_dir, "*.gms"))
+            if gms_files:
+                latest_gms = max(gms_files, key=os.path.getmtime)
+                dest_gms = f"Results/gurobi_model_MINLP/model_{experiment_name}.gms"
+                shutil.copy2(latest_gms, dest_gms)
+                print(f"Copied GAMS model to {dest_gms}")
+
+            # Copy listing file
+            lst_files = glob.glob(os.path.join(temp_dir, "*.lst"))
+            if lst_files:
+                latest_lst = max(lst_files, key=os.path.getmtime)
+                dest_lst = f"Results/gurobi_lst_MINLP/lst_{experiment_name}.lst"
+                shutil.copy2(latest_lst, dest_lst)
+                print(f"Copied GAMS listing to {dest_lst}")
+
+            # Copy solution file
+            sol_files = glob.glob(os.path.join(temp_dir, "*.sol"))
+            if sol_files:
+                latest_sol = max(sol_files, key=os.path.getmtime)
+                dest_sol = f"Results/gurobi_res_MINLP/res_{experiment_name}.sol"
+                shutil.copy2(latest_sol, dest_sol)
+                print(f"Copied solution file to {dest_sol}")
+
+            # Copy results.dat if it exists
+            results_dat = os.path.join(temp_dir, "results.dat")
+            if os.path.exists(results_dat):
+                dest_res = f"Results/gurobi_res_MINLP/results_{experiment_name}.dat"
+                shutil.copy2(results_dat, dest_res)
+                print(f"Copied results.dat to {dest_res}")
+
+            # Copy resultsstat.dat if it exists
+            resultsstat_dat = os.path.join(temp_dir, "resultsstat.dat")
+            if os.path.exists(resultsstat_dat):
+                dest_stats = (
+                    f"Results/gurobi_results_stats_MINLP/stats_{experiment_name}.dat"
+                )
+                shutil.copy2(resultsstat_dat, dest_stats)
+                print(f"Copied resultsstat.dat to {dest_stats}")
 
     elif solver == "baron":
         os.makedirs("Results/baron_model_MINLP", exist_ok=True)
@@ -131,7 +291,7 @@ if __name__ == "__main__":
         os.makedirs("Results/baron_timefiles_MINLP", exist_ok=True)
 
         solver = pyo.SolverFactory("baron")
-        solver.options["MaxTime"] = 3600
+        solver.options["MaxTime"] = max_time
         solver.options["CplexLibName"] = r"C:\GAMS\48\cplex2211.dll"
         # pyomo deactivates the creation of summary file, even though baron creates it by default
         solver.options["summary"] = 1
