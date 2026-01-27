@@ -391,6 +391,10 @@ if __name__ == "__main__":
     print(mdl.get_parity_plot_data())
     print("Assigned operators to nodes: ", mdl.get_selected_operators())
 
+    # Get the objective value from the solved model
+    objective_value = pyo.value(mdl.sse)
+    print(f"Objective value: {objective_value}")
+
     parity_data = mdl.get_parity_plot_data()
 
     # Append predictions to train data CSV
@@ -405,9 +409,49 @@ if __name__ == "__main__":
     # Calculate NRMSE for training set
     train_actuals = parity_data["sim_data"].values
     train_predictions = parity_data["prediction"].values
-    rmse_train = np.sqrt(np.mean((train_actuals - train_predictions) ** 2))
+    sse_minlp = np.sum((train_actuals - train_predictions) ** 2)
+    rmse_minlp = np.sqrt(np.mean((train_actuals - train_predictions) ** 2))
     y_range = train_actuals.max() - train_actuals.min()
-    nrmse_train = rmse_train / y_range if y_range != 0 else 0.0
+    nrmse_minlp = rmse_minlp / y_range if y_range != 0 else 0.0
+
+    # SSE calculated using the true derived model
+    parity_data_sim = mdl.get_parity_plot_data()["sim_data"].values
+    sse_true = sum(
+        [
+            (
+                mdl.samples[sample_idx].compare_node_values().loc[1, "True Value"]
+                - parity_data_sim[idx]
+            )
+            ** 2
+            for idx, sample_idx in enumerate(mdl.samples)
+        ]
+    )
+
+    # Calculate SSE for every node
+    SSE_node_list = []
+    # Get the first sample index to iterate over the nodes
+    first_sample_idx = next(iter(mdl.samples))
+    for node_id in mdl.samples[first_sample_idx].compare_node_values().index:
+        SSE_node = float(
+            sum(
+                [
+                    (
+                        mdl.samples[sample_idx]
+                        .compare_node_values()
+                        .loc[node_id, "Computed Value"]
+                        - mdl.samples[sample_idx]
+                        .compare_node_values()
+                        .loc[node_id, "True Value"]
+                    )
+                    ** 2
+                    for sample_idx in mdl.samples
+                ]
+            )
+        )
+        SSE_node_list.append(SSE_node)
+        print(f"Node {node_id}: SSE = {SSE_node}")
+
+    print("\nSSE_node_list =", SSE_node_list)
 
     expr = mdl.selected_tree_to_expression()
     expr = expr.sympy_expression
@@ -440,6 +484,33 @@ if __name__ == "__main__":
         "[" + ", ".join([f"c{i}: {val}" for i, val in constants_in_expr]) + "]"
     )
 
+    # Make predictions on the test data first
+    feature_vars = [sp.Symbol(f"x{i}") for i in range(1, len(X_test_df.columns) + 1)]
+    SR_model_func = sp.lambdify(feature_vars, SR_model, modules="numpy")
+
+    test_predictions = np.array([SR_model_func(*row) for row in X_test_df.to_numpy()])
+    test_actuals = y_test_df.values.flatten()
+    sse_test = np.sum((test_actuals - test_predictions) ** 2)
+
+    # Check if SR model's prediction is correct
+    sr_prediction_correct = 1 if abs(sse_minlp - sse_true) < 1e-6 else 0
+
+    # Check if SR model generalizes on the test set
+    sr_model_good_on_test = 1 if abs(sse_test) < 1e-1 else 0
+
+    # Check if all node values are correct
+    node_values_correct = 1 if all(abs(sse) < 1e-6 for sse in SSE_node_list) else 0
+
+    law_probably_found = (
+        1
+        if (
+            sr_prediction_correct == 1
+            and sr_model_good_on_test == 1
+            and node_values_correct == 1
+        )
+        else 0
+    )
+
     # Save to SR_model.csv (append mode)
     os.makedirs(RESULTS_DIR, exist_ok=True)
     sr_model_csv_path = os.path.join(RESULTS_DIR, "SR_model.csv")
@@ -453,7 +524,16 @@ if __name__ == "__main__":
             "constant_values": [constant_values_str],
             "nodes_assignments": [str(selected_operators)],
             "var_bounds": [f"({v_lo}, {v_up})"],
-            "nrmse_train": [nrmse_train],
+            "nrmse_train": [nrmse_minlp],
+            "sse_train": [sse_minlp],
+            "objective": [objective_value],
+            "sse_true": [sse_true],
+            "sr_prediction_correct": [sr_prediction_correct],
+            "SSE_node_list": [str(SSE_node_list)],
+            "node_values_correct": [node_values_correct],
+            "sse_test": [sse_test],
+            "sr_model_good_on_test": [sr_model_good_on_test],
+            "law_probably_found": [law_probably_found],
         }
     )
 
@@ -467,13 +547,6 @@ if __name__ == "__main__":
         updated_df = new_row
 
     updated_df.to_csv(sr_model_csv_path, index=False)
-
-    feature_vars = [sp.Symbol(f"x{i}") for i in range(1, len(X_test_df.columns) + 1)]
-    SR_model_func = sp.lambdify(feature_vars, SR_model, modules="numpy")
-
-    # Make predictions on the test data
-    test_predictions = np.array([SR_model_func(*row) for row in X_test_df.to_numpy()])
-    test_actuals = y_test_df.values.flatten()
 
     # Append predictions to test data CSV
     test_data_path = os.path.join(
