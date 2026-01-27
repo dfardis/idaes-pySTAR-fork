@@ -28,6 +28,8 @@ print("Model type of the MINLP =", model_type)
 with open("solver.txt", "r") as file:
     solver = file.read().strip()
 print("Solver used to solve the MINLP =", solver)
+# Save solver name before it gets overwritten with solver object
+solver_name = solver
 
 with open("max_time.txt", "r") as file:
     max_time = file.read().strip()
@@ -51,7 +53,7 @@ if os.path.exists("v_lo.txt") and os.path.exists("v_up.txt"):
     custom_bounds = True
 
 # Create experiment name
-experiment_name = f"{dataset_name}_{model_type}_{fitness_metric}_{solver}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+experiment_name = f"{dataset_name}_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
 if custom_bounds:
     experiment_name += "_bounds_x10"
 
@@ -511,9 +513,18 @@ if __name__ == "__main__":
         else 0
     )
 
-    # Save to SR_model.csv (append mode)
+    # Save to individual CSV file in dedicated folder
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    sr_model_csv_path = os.path.join(RESULTS_DIR, "SR_model.csv")
+
+    # Create folder name based on hyperparameters
+    sr_models_folder_name = f"SR_models_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+    sr_models_folder_path = os.path.join(RESULTS_DIR, sr_models_folder_name)
+    os.makedirs(sr_models_folder_path, exist_ok=True)
+
+    # Create individual CSV file for this experiment
+    individual_csv_path = os.path.join(
+        sr_models_folder_path, f"SR_model_{experiment_name}.csv"
+    )
 
     # Create new row with experiment data
     new_row = pd.DataFrame(
@@ -537,16 +548,8 @@ if __name__ == "__main__":
         }
     )
 
-    # Append to CSV (create if doesn't exist, overwrite if experiment_name exists)
-    if os.path.exists(sr_model_csv_path):
-        existing_df = pd.read_csv(sr_model_csv_path)
-        # Remove existing row with same experiment_name if it exists
-        existing_df = existing_df[existing_df["experiment_name"] != experiment_name]
-        updated_df = pd.concat([existing_df, new_row], ignore_index=True)
-    else:
-        updated_df = new_row
-
-    updated_df.to_csv(sr_model_csv_path, index=False)
+    # Save individual experiment to its own CSV file
+    new_row.to_csv(individual_csv_path, index=False, quoting=1)
 
     # Append predictions to test data CSV
     test_data_path = os.path.join(
