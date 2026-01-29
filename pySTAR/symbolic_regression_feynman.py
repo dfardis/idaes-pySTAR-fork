@@ -88,15 +88,24 @@ y_test_np = y_test_df.to_numpy().reshape(-1, 1)
 os.makedirs(os.path.join(RESULTS_DIR, "Train_data"), exist_ok=True)
 os.makedirs(os.path.join(RESULTS_DIR, "Test_data"), exist_ok=True)
 
+# Create subdirectories for train and test data based on hyperparameters
+train_data_subdir_name = f"train_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+train_data_subdir_path = os.path.join(RESULTS_DIR, "Train_data", train_data_subdir_name)
+os.makedirs(train_data_subdir_path, exist_ok=True)
+
+test_data_subdir_name = f"test_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+test_data_subdir_path = os.path.join(RESULTS_DIR, "Test_data", test_data_subdir_name)
+os.makedirs(test_data_subdir_path, exist_ok=True)
+
 train_with_data = pd.concat([X_train_df, y_train_df], axis=1)
 train_with_data.to_csv(
-    os.path.join(RESULTS_DIR, "Train_data", f"train_data_{experiment_name}.csv"),
+    os.path.join(train_data_subdir_path, f"train_data_{experiment_name}.csv"),
     index=True,
 )
 
 test_with_data = pd.concat([X_test_df, y_test_df], axis=1)
 test_with_data.to_csv(
-    os.path.join(RESULTS_DIR, "Test_data", f"test_data_{experiment_name}.csv"),
+    os.path.join(test_data_subdir_path, f"test_data_{experiment_name}.csv"),
     index=True,
 )
 
@@ -341,8 +350,14 @@ if __name__ == "__main__":
 
     elif solver == "baron":
         os.makedirs(os.path.join(RESULTS_DIR, "baron_model_MINLP"), exist_ok=True)
+        baron_model_subdir_name = f"model_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+        baron_model_subdir_path = os.path.join(
+            RESULTS_DIR, "baron_model_MINLP", baron_model_subdir_name
+        )
+        os.makedirs(baron_model_subdir_path, exist_ok=True)
+
         mdl.write(
-            os.path.join(RESULTS_DIR, "baron_model_MINLP", f"{experiment_name}.bar"),
+            os.path.join(baron_model_subdir_path, f"{experiment_name}.bar"),
             format="bar",
         )
 
@@ -351,13 +366,39 @@ if __name__ == "__main__":
         os.makedirs(os.path.join(RESULTS_DIR, "baron_summaries_MINLP"), exist_ok=True)
         os.makedirs(os.path.join(RESULTS_DIR, "baron_timefiles_MINLP"), exist_ok=True)
 
+        # Create subdirectory for baron results based on hyperparameters
+        baron_res_subdir_name = f"res_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+        baron_res_subdir_path = os.path.join(
+            RESULTS_DIR, "baron_res_MINLP", baron_res_subdir_name
+        )
+        os.makedirs(baron_res_subdir_path, exist_ok=True)
+
+        # Create subdirectory for baron logs based on hyperparameters
+        baron_log_subdir_name = f"log_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+        baron_log_subdir_path = os.path.join(
+            RESULTS_DIR, "baron_log_MINLP", baron_log_subdir_name
+        )
+        os.makedirs(baron_log_subdir_path, exist_ok=True)
+
+        # Create subdirectory for baron summaries based on hyperparameters
+        baron_summaries_subdir_name = f"summaries_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+        baron_summaries_subdir_path = os.path.join(
+            RESULTS_DIR, "baron_summaries_MINLP", baron_summaries_subdir_name
+        )
+        os.makedirs(baron_summaries_subdir_path, exist_ok=True)
+        # Create subdirectory for baron timefiles based on hyperparameters
+        baron_timefiles_subdir_name = f"timefiles_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
+        baron_timefiles_subdir_path = os.path.join(
+            RESULTS_DIR, "baron_timefiles_MINLP", baron_timefiles_subdir_name
+        )
+        os.makedirs(baron_timefiles_subdir_path, exist_ok=True)
         solver = pyo.SolverFactory("baron")
         solver.options["MaxTime"] = max_time
         solver.options["CplexLibName"] = r"C:\GAMS\48\cplex2211.dll"
         # pyomo deactivates the creation of summary file, even though baron creates it by default
         solver.options["summary"] = 1
         solver.options["SumName"] = os.path.join(
-            RESULTS_DIR, "baron_summaries_MINLP", f"summary_{experiment_name}"
+            baron_summaries_subdir_path, f"summary_{experiment_name}"
         )
 
         results = solver.solve(
@@ -365,12 +406,8 @@ if __name__ == "__main__":
             tee=True,
             symbolic_solver_labels=True,
             keepfiles=True,
-            solnfile=os.path.join(
-                RESULTS_DIR, "baron_res_MINLP", f"res_{experiment_name}"
-            ),
-            logfile=os.path.join(
-                RESULTS_DIR, "baron_log_MINLP", f"log_{experiment_name}.log"
-            ),
+            solnfile=os.path.join(baron_res_subdir_path, f"res_{experiment_name}"),
+            logfile=os.path.join(baron_log_subdir_path, f"log_{experiment_name}.log"),
         )
 
         # Copy the tim file from temp directory to desired location
@@ -384,7 +421,7 @@ if __name__ == "__main__":
             # Get the most recently modified tim file
             latest_tim = max(tim_files, key=os.path.getmtime)
             dest_tim = os.path.join(
-                RESULTS_DIR, "baron_timefiles_MINLP", f"tim_{experiment_name}"
+                baron_timefiles_subdir_path, f"tim_{experiment_name}"
             )
             shutil.copy2(latest_tim, dest_tim)
             print(f"Copied tim file to {dest_tim}")
@@ -401,7 +438,7 @@ if __name__ == "__main__":
 
     # Append predictions to train data CSV
     train_data_path = os.path.join(
-        RESULTS_DIR, "Train_data", f"train_data_{experiment_name}.csv"
+        train_data_subdir_path, f"train_data_{experiment_name}.csv"
     )
     train_df = pd.read_csv(train_data_path, index_col=0)
     train_df["prediction"] = parity_data["prediction"].values
@@ -515,10 +552,13 @@ if __name__ == "__main__":
 
     # Save to individual CSV file in dedicated folder
     os.makedirs(RESULTS_DIR, exist_ok=True)
+    os.makedirs(os.path.join(RESULTS_DIR, "SR_models"), exist_ok=True)
 
     # Create folder name based on hyperparameters
     sr_models_folder_name = f"SR_models_{model_type}_{fitness_metric}_{solver_name}_max_time_{max_time}_maxdepth{depth}_samples{number_of_samples}"
-    sr_models_folder_path = os.path.join(RESULTS_DIR, sr_models_folder_name)
+    sr_models_folder_path = os.path.join(
+        RESULTS_DIR, "SR_models", sr_models_folder_name
+    )
     os.makedirs(sr_models_folder_path, exist_ok=True)
 
     # Create individual CSV file for this experiment
@@ -553,7 +593,7 @@ if __name__ == "__main__":
 
     # Append predictions to test data CSV
     test_data_path = os.path.join(
-        RESULTS_DIR, "Test_data", f"test_data_{experiment_name}.csv"
+        test_data_subdir_path, f"test_data_{experiment_name}.csv"
     )
     test_df = pd.read_csv(test_data_path, index_col=0)
     test_df["prediction"] = test_predictions
