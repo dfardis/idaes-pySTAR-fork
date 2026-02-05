@@ -57,7 +57,9 @@ experiment_name = f"{dataset_name}_{model_type}_{fitness_metric}_{solver_name}_m
 if custom_bounds:
     experiment_name += "_bounds_x10"
 
-df = pd.read_csv(os.path.join(SCRIPT_DIR, "Feynman_all_depths", dataset_name), sep="\t")
+df = pd.read_csv(
+    os.path.join(SCRIPT_DIR, "Datasets/Feynman_all_depths", dataset_name), sep="\t"
+)
 X_df = df.iloc[:, :-1]
 y_df = df.iloc[
     :, [-1]
@@ -570,8 +572,12 @@ if __name__ == "__main__":
     new_row = pd.DataFrame(
         {
             "experiment_name": [experiment_name],
-            "expression": [str(expr)],
-            "SR_model": [str(SR_model)],
+            "expression": [
+                f'="{str(expr)}"'
+            ],  # Excel formula format to display as text
+            "SR_model": [
+                f'="{str(SR_model)}"'
+            ],  # Excel formula format to display as text
             "constant_values": [constant_values_str],
             "nodes_assignments": [str(selected_operators)],
             "var_bounds": [f"({v_lo}, {v_up})"],
