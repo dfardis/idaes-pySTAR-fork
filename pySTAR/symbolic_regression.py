@@ -267,13 +267,55 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             Sum of squares of errors: "sse"
             Bayesian Information Criterion: "bic", by default "sse"
         """
+
+        # Define quantities needed in the definitions of model selection criteria
+        self.n_data = len(self.input_data_ref)
+        self.n_nodes = sum(self.select_node[n] for n in self.nodes_set)
+        self.n_operators = sum(
+            self.select_operator[n, op]
+            for n in self.nodes_set
+            for op in self.operators_set
+        )
+
         if objective_type == "sse":
             # build SSR objective
             self.sse = pyo.Objective(expr=self.sum_square_residual)
 
-        elif objective_type == "bic":
+        elif objective_type == "bic_nodes":
             # Build BIC objective
-            raise NotImplementedError("BIC is not supported currently")
+            self.complexity = self.n_nodes
+            self.bic = pyo.Objective(
+                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
+                + self.complexity * pyo.log(self.n_data)
+            )
+
+        elif objective_type == "bic_operators":
+            # Build BIC objective
+            self.complexity = self.n_operators
+            self.bic = pyo.Objective(
+                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
+                + self.complexity * pyo.log(self.n_data)
+            )
+
+        elif objective_type == "aic_nodes":
+            # Build AIC objective
+            self.complexity = self.n_nodes
+            self.aic = pyo.Objective(
+                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
+                + self.complexity * 2
+            )
+
+        elif objective_type == "aic_cor_nodes":
+            # Build AICc objective
+            self.complexity = self.n_nodes
+            self.aic = pyo.Objective(
+                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
+                + self.complexity * 2
+                + 2
+                * self.complexity
+                * (self.complexity + 1)
+                / (self.n_data - self.complexity - 1)
+            )
 
         else:
             raise ValueError(
