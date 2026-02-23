@@ -308,13 +308,21 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         elif objective_type == "aic_cor_nodes":
             # Build AICc objective
             self.complexity = self.n_nodes
-            self.aic = pyo.Objective(
+            self.aic_cor = pyo.Objective(
                 expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
                 + self.complexity * 2
                 + 2
                 * self.complexity
                 * (self.complexity + 1)
                 / (self.n_data - self.complexity - 1)
+            )
+
+        elif objective_type == "hqic_nodes":
+            # Build HQIC objective
+            self.complexity = self.n_nodes
+            self.hqic = pyo.Objective(
+                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
+                + self.complexity * 2 * pyo.log(pyo.log(self.n_data))
             )
 
         else:
