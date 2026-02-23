@@ -58,7 +58,8 @@ if custom_bounds:
     experiment_name += "_bounds_x10"
 
 df = pd.read_csv(
-    os.path.join(SCRIPT_DIR, "Datasets/Feynman_all_depths", dataset_name), sep="\t"
+    os.path.join(SCRIPT_DIR, "Datasets/Feynman_maxdepth3_noise1", dataset_name),
+    sep="\t",
 )
 X_df = df.iloc[:, :-1]
 y_df = df.iloc[
@@ -433,7 +434,8 @@ if __name__ == "__main__":
     print("Assigned operators to nodes: ", mdl.get_selected_operators())
 
     # Get the objective value from the solved model
-    objective_value = pyo.value(mdl.sse)
+    objective = next(mdl.component_objects(pyo.Objective, active=True))
+    objective_value = pyo.value(objective)
     print(f"Objective value: {objective_value}")
 
     parity_data = mdl.get_parity_plot_data()
@@ -568,6 +570,12 @@ if __name__ == "__main__":
         sr_models_folder_path, f"SR_model_{experiment_name}.csv"
     )
 
+    # Get complexity value if it exists (for BIC objectives)
+    if hasattr(mdl, "complexity"):
+        complexity_value = pyo.value(mdl.complexity)
+    else:
+        complexity_value = None
+
     # Create new row with experiment data
     new_row = pd.DataFrame(
         {
@@ -584,6 +592,7 @@ if __name__ == "__main__":
             "nrmse_minlp": [nrmse_minlp],
             "sse_minlp": [sse_minlp],
             "objective": [objective_value],
+            "complexity": [complexity_value],
             "sse_true": [sse_true],
             "sr_prediction_correct": [sr_prediction_correct],
             "SSE_node_list": [str(SSE_node_list)],
