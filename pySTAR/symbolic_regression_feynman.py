@@ -47,6 +47,10 @@ with open("max_depth.txt", "r") as file:
     depth = int(file.read().strip())
 print("Maximum depth of tree =", depth)
 
+with open("cuts.txt", "r") as file:
+    cuts = file.read().strip()
+print("Redundancy cuts used =", cuts)
+
 # Check if custom variable bounds are provided via txt files
 custom_bounds = False
 if os.path.exists("v_lo.txt") and os.path.exists("v_up.txt"):
@@ -153,6 +157,13 @@ def build_model():
     )
     m.add_objective(fitness_metric)
 
+    if cuts == "yes":
+        m.add_same_operand_operation_cuts()
+        m.add_constant_operation_cuts()
+        m.add_associative_operation_cuts()
+        m.add_inverse_function_composition_cuts()
+        m.add_symmetry_breaking_cuts()
+        m.add_implication_cuts()
     return m
 
 
