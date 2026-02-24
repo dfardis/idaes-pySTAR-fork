@@ -277,6 +277,16 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             Sum of squares of errors: "sse"
             Bayesian Information Criterion: "bic", by default "sse"
         """
+
+        # Define quantities needed in the definitions of model selection criteria
+        self.n_data = len(self.input_data_ref)
+        self.n_nodes = sum(self.select_node[n] for n in self.nodes_set)
+        self.n_operators = sum(
+            self.select_operator[n, op]
+            for n in self.nodes_set
+            for op in self.operators_set
+        )
+
         if objective_type == "sse":
             # build SSR objective
             self.sse = pyo.Objective(expr=self.sum_square_residual)
