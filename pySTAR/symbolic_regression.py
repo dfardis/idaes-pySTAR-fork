@@ -15,6 +15,16 @@ LOGGER = logging.getLogger(__name__)
 SUPPORTED_UNARY_OPS = ["square", "sqrt", "log", "exp"]
 SUPPORTED_BINARY_OPS = ["sum", "diff", "mult", "div"]
 # SUPPORTED_UNARY_OPS += ["exp_old", "exp_comp", "log_old", "log_comp"]
+OPERATOR_WEIGHTS = {
+    "sum": 1,
+    "diff": 1,
+    "mult": 1,
+    "div": 2,
+    "square": 1,
+    "sqrt": 2,
+    "log": 2,
+    "exp": 2,
+}
 
 
 # pylint: disable = logging-fstring-interpolation
@@ -280,55 +290,111 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         if objective_type == "sse":
             # build SSR objective
             self.sse = pyo.Objective(expr=self.sum_square_residual)
+            return
 
-        elif objective_type == "bic_nodes":
+        # Defining an auxiliary variable for SSE for convenience
+        # Note that y = y_data_1 is a valid/feasible expression. The SSE
+        # value corresponding to this expression is used as an upper bound and
+        # we use an epsilon as a lower bound to avoid log(0)
+        sse_upper_bound = (
+            (self.output_data_ref - self.output_data_ref.iloc[0]) ** 2
+        ).sum()
+        self.aux_var_sse = Var(
+            within=pyo.NonNegativeReals,
+            bounds=(self.eps_value, sse_upper_bound),
+            doc="Auxiliary variable for sum of square of residuals",
+        )
+
+        self.compute_sse_value = Constraint(
+            expr=self.aux_var_sse == self.eps_value + self.sum_square_residual,
+            doc="Computes the value of sum of squares of errors",
+        )
+
+        if "bic" in objective_type:
             # Build BIC objective
-            self.complexity = self.n_nodes
+            # Supported options: "nodes", "depth", "csts", "wtd_operators", "operators"
+            num_data_pts = len(self.output_data_ref)
             self.bic = pyo.Objective(
-                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
-                + self.complexity * pyo.log(self.n_data)
+                expr=num_data_pts * pyo.log(self.aux_var_sse / num_data_pts)
+                + self._get_penalization_expression(objective_type[4:])
+                * pyo.log(num_data_pts)
             )
+            return
 
-        elif objective_type == "bic_operators":
-            # Build BIC objective
-            self.complexity = self.n_operators
-            self.bic = pyo.Objective(
-                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
-                + self.complexity * pyo.log(self.n_data)
-            )
+        raise ValueError(
+            f"Specified objective_type: {objective_type} is not supported."
+        )
 
-        elif objective_type == "aic_nodes":
-            # Build AIC objective
-            self.complexity = self.n_nodes
-            self.aic = pyo.Objective(
-                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
-                + self.complexity * 2
-            )
+    def _get_penalization_expression(self, penalty: str):
+        """Returns the penalization term"""
+        match penalty:
+            case "nodes":
+                return sum(self.select_node[n] for n in self.nodes_set)
 
-        elif objective_type == "aic_cor_nodes":
-            # Build AICc objective
-            self.complexity = self.n_nodes
-            self.aic_cor = pyo.Objective(
-                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
-                + self.complexity * 2
-                + 2
-                * self.complexity
-                * (self.complexity + 1)
-                / (self.n_data - self.complexity - 1)
-            )
+            case "csts":
+                return sum(self.select_operator[n, "cst"] for n in self.nodes_set)
 
-        elif objective_type == "hqic_nodes":
-            # Build HQIC objective
-            self.complexity = self.n_nodes
-            self.hqic = pyo.Objective(
-                expr=self.n_data * pyo.log((self.sum_square_residual) / self.n_data)
-                + self.complexity * 2 * pyo.log(pyo.log(self.n_data))
-            )
+            case "operators":
+                return sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
 
-        else:
-            raise ValueError(
-                f"Specified objective_type: {objective_type} is not supported."
-            )
+            case "wtd_operators":
+                return sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+
+            case "depth":
+                self.selected_depth_level = Var(within=pyo.NonNegativeReals)
+
+                @self.Constraint(self.nodes_set)
+                def compute_depth_level(blk, n):
+                    return (
+                        blk.selected_depth_level
+                        >= int(np.ceil(np.log2(n + 1)) - 1) * blk.select_node[n]
+                    )
+
+                return self.selected_depth_level
+
+            case "depth_new":
+                self._add_depth_level_variables()
+                return sum(self.select_depth.values())
+
+            case _:
+                raise ValueError(f"Unrecognized penalty type {penalty}")
+
+    def _add_depth_level_variables(self):
+        """Defines new binary variables to track the depth"""
+        # n_to_d_map: nodes to depth map; d_to_n_map: depth to nodes map
+        n_to_d_map = {n: int(np.ceil(np.log2(n + 1))) for n in self.nodes_set}
+        d_to_n_map = {
+            d: list(range(2 ** (d - 1), 2**d)) for d in range(1, self.max_depth + 1)
+        }
+
+        self.select_depth = Var(
+            pyo.RangeSet(self.max_depth),
+            within=pyo.Binary,
+            doc="Indicates whether a node at a depth level is selected",
+        )
+
+        @self.Constraint(self.select_depth.index_set())
+        def ordering_select_depth_varaibles(blk, d):
+            if d == 1:
+                return Constraint.Skip
+
+            return blk.select_depth[d] <= blk.select_depth[d - 1]
+
+        @self.Constraint(self.select_depth.index_set())
+        def select_nodes_based_on_depth(blk, d):
+            return sum(blk.select_node[n] for n in d_to_n_map[d]) >= blk.select_depth[d]
+
+        @self.Constraint(self.nodes_set)
+        def suppress_nodes_based_on_depth(blk, n):
+            return blk.select_node[n] <= blk.select_depth[n_to_d_map[n]]
 
     def add_same_operand_operation_cuts(self):
         """Adds cuts to avoid expressions of type: x + x, x - x, x * x, x / x"""
