@@ -306,7 +306,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             num_data_pts = len(self.output_data_ref)
             self.bic = pyo.Objective(
                 expr=num_data_pts * pyo.log(self.aux_var_sse / num_data_pts)
-                + self._get_bic_penalization_expression(objective_type)
+                + self._get_penalization_expression(objective_type[4:])
                 * pyo.log(num_data_pts)
             )
             return
@@ -315,30 +315,30 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             f"Specified objective_type: {objective_type} is not supported."
         )
 
-    def _get_bic_penalization_expression(self, penalty: str):
-        """Returns the penalization term for BIC"""
+    def _get_penalization_expression(self, penalty: str):
+        """Returns the penalization term"""
         match penalty:
-            case "bic_nodes":
+            case "nodes":
                 return sum(self.select_node[n] for n in self.nodes_set)
 
-            case "bic_csts":
+            case "csts":
                 return sum(self.select_operator[n, "cst"] for n in self.nodes_set)
 
-            case "bic_operators":
+            case "operators":
                 return sum(
                     self.select_operator[n, op]
                     for n in self.nodes_set
                     for op in self.operators_set
                 )
 
-            case "bic_wtd_operators":
+            case "wtd_operators":
                 return sum(
                     OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
                     for n in self.nodes_set
                     for op in self.operators_set
                 )
 
-            case "bic_depth":
+            case "depth":
                 self.selected_depth_level = Var(within=pyo.NonNegativeReals)
 
                 @self.Constraint(self.nodes_set)
@@ -350,12 +350,12 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
                 return self.selected_depth_level
 
-            case "bic_depth_new":
+            case "depth_new":
                 self._add_depth_level_variables()
                 return sum(self.select_depth.values())
 
             case _:
-                raise ValueError(f"Unrecognized penalty type {penalty} for BIC")
+                raise ValueError(f"Unrecognized penalty type {penalty}")
 
     def _add_depth_level_variables(self):
         """Defines new binary variables to track the depth"""
