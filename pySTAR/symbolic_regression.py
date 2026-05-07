@@ -588,6 +588,50 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                     <= blk.select_node[n]
                 )
 
+    def add_partial_sampling(self, dataset: pd.DataFrame):
+        """
+        Adds sqrt non-negativity and division nonzero constraints for additional samples.
+        """
+        sample_indices = dataset.index.to_list()
+        vlb = self.var_bounds["lb"]
+
+        if "sqrt" in self.unary_operators_set:
+
+            # val_node[2*n+1] (the child/input to sqrt) must be non-negative
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_sqrt_non_negativity_constraint(blk, s, n):
+                return (
+                    blk.samples[s].val_node[2 * n + 1]
+                    >= (1 - blk.select_operator[n, "sqrt"]) * vlb
+                )
+
+            # val_node[n] (the output/parent of sqrt) must be non-negative
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_sqrt_non_negativity_constraint_parent(blk, s, n):
+                return (
+                    blk.samples[s].val_node[n]
+                    >= (1 - blk.select_operator[n, "sqrt"]) * vlb
+                )
+
+        if "div" in self.binary_operators_set:
+
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_div_avoid_zero_constraint(blk, s, n):
+                return (
+                    blk.samples[s].val_node[2 * n + 1] ** 2
+                    >= blk.select_operator[n, "div"] - 1 + blk.eps_value
+                )
+
+        if "log" in self.unary_operators_set:
+
+            # Ensures the argument of log is positive (away from zero) when log is selected
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_log_avoid_zero_constraint(blk, s, n):
+                return (
+                    blk.select_operator[n, "log"] * blk.samples[s].val_node[2 * n + 1]
+                    >= blk.select_operator[n, "log"] - 1 + blk.eps_value
+                )
+
     def constrain_max_tree_size(self, size: int):
         """Adds a constraint to constrain the maximum size of the tree"""
         self.max_tree_size = size
