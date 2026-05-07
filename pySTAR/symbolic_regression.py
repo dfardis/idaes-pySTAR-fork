@@ -590,26 +590,65 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
     def add_partial_sampling(self, dataset: pd.DataFrame):
         """
-        Adds sqrt non-negativity and division nonzero constraints for additional samples.
+        For a set of external (non-training) samples, creates val_node variables
+        and adds sqrt non-negativity, sqrt parent non-negativity, div avoid-zero,
+        and log avoid-zero constraints. The dataset columns must match the
+        internally renamed input columns (x1, x2, ...).
         """
         sample_indices = dataset.index.to_list()
         vlb = self.var_bounds["lb"]
 
+        # Rename dataset columns to match internal names (x1, x2, ...)
+        # regardless of what column names the CSV was saved with
+        internal_cols = self.input_data_ref.columns.tolist()  # ['x1', 'x2', ...]
+        dataset = dataset.iloc[:, : len(internal_cols)].copy()
+        dataset.columns = internal_cols
+
+        # Create val_node variables for the partial samples
+        # pylint: disable = attribute-defined-outside-init
+        self.partial_val_node = pyo.Var(
+            sample_indices,
+            self.nodes_set,
+            bounds=(self.var_bounds["lb"], self.var_bounds["ub"]),
+            doc="Value at each node for partial samples",
+        )
+
+        # Value-bounding constraints (mirrors BigmSampleBlock value_upper/lower_bound_constraint)
+        @self.Constraint(sample_indices, self.nodes_set)
+        def partial_value_upper_bound_constraint(blk, s, n):
+            data = dataset.loc[s]
+            return blk.partial_val_node[s, n] <= blk.constant_val[n] + sum(
+                data[op] * blk.select_operator[n, op]
+                for op in blk.operands_set
+                if op != "cst"
+            ) + blk.var_bounds["ub"] * sum(
+                blk.select_operator[n, op] for op in blk.operators_set
+            )
+
+        @self.Constraint(sample_indices, self.nodes_set)
+        def partial_value_lower_bound_constraint(blk, s, n):
+            data = dataset.loc[s]
+            return blk.partial_val_node[s, n] >= blk.constant_val[n] + sum(
+                data[op] * blk.select_operator[n, op]
+                for op in blk.operands_set
+                if op != "cst"
+            ) + blk.var_bounds["lb"] * sum(
+                blk.select_operator[n, op] for op in blk.operators_set
+            )
+
         if "sqrt" in self.unary_operators_set:
 
-            # val_node[2*n+1] (the child/input to sqrt) must be non-negative
             @self.Constraint(sample_indices, self.non_terminal_nodes_set)
             def partial_sqrt_non_negativity_constraint(blk, s, n):
                 return (
-                    blk.samples[s].val_node[2 * n + 1]
+                    blk.partial_val_node[s, 2 * n + 1]
                     >= (1 - blk.select_operator[n, "sqrt"]) * vlb
                 )
 
-            # val_node[n] (the output/parent of sqrt) must be non-negative
             @self.Constraint(sample_indices, self.non_terminal_nodes_set)
             def partial_sqrt_non_negativity_constraint_parent(blk, s, n):
                 return (
-                    blk.samples[s].val_node[n]
+                    blk.partial_val_node[s, n]
                     >= (1 - blk.select_operator[n, "sqrt"]) * vlb
                 )
 
@@ -618,17 +657,16 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             @self.Constraint(sample_indices, self.non_terminal_nodes_set)
             def partial_div_avoid_zero_constraint(blk, s, n):
                 return (
-                    blk.samples[s].val_node[2 * n + 1] ** 2
+                    blk.partial_val_node[s, 2 * n + 1] ** 2
                     >= blk.select_operator[n, "div"] - 1 + blk.eps_value
                 )
 
         if "log" in self.unary_operators_set:
 
-            # Ensures the argument of log is positive (away from zero) when log is selected
             @self.Constraint(sample_indices, self.non_terminal_nodes_set)
             def partial_log_avoid_zero_constraint(blk, s, n):
                 return (
-                    blk.select_operator[n, "log"] * blk.samples[s].val_node[2 * n + 1]
+                    blk.select_operator[n, "log"] * blk.partial_val_node[s, 2 * n + 1]
                     >= blk.select_operator[n, "log"] - 1 + blk.eps_value
                 )
 
