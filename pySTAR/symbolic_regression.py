@@ -311,11 +311,10 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         )
 
         if objective_type.startswith("mse_"):
-
+            # Add constraint to ensure that the denominator of MSE is positive
             self.mse_complexity_limit = Constraint(
                 expr=self._get_penalization_expression(objective_type[4:])
                 <= self.num_data_pts - 2,
-                doc="Constrains denominator of MSE to be positive",
             )
 
             # build MSE objective with complexity penalized
@@ -340,6 +339,12 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             return
 
         if objective_type.startswith("aic_cor_"):
+            # Add constraint to ensure that the denominator of AICc is positive
+            self.aicc_complexity_limit = Constraint(
+                expr=self._get_penalization_expression(objective_type[8:])
+                <= self.num_data_pts - 2,
+            )
+
             # Build corrected AIC objective
             # Supported options: "nodes", "depth", "depth_new", "csts", "wtd_operators", "operators"
             penalty = self._get_penalization_expression(objective_type[8:])
