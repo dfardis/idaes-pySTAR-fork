@@ -336,7 +336,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             )
             return
 
-        if objective_type == "operations_no_cst":
+        if objective_type == "op_no_cst":
             # build operators minus constants objective:
             # penalizes number of operators but not operations involving constants
             self.operators_no_cst_obj = pyo.Objective(
@@ -349,7 +349,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             )
             return
 
-        if objective_type == "wtd_operations_no_csts":
+        if objective_type == "wtd_op_no_cst":
             # build weighted operators minus constants objective:
             # penalizes operators by weight but not operations involving constants
             self.wtd_operations_no_csts_obj = pyo.Objective(
@@ -500,14 +500,14 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                     for op in complex_ops
                 )
 
-            case "operations_no_cst":
+            case "op_no_cst":
                 return sum(
                     self.select_operator[n, op]
                     for n in self.nodes_set
                     for op in self.operators_set
                 ) - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
 
-            case "wtd_operations_no_csts":
+            case "wtd_op_no_cst":
                 return sum(
                     OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
                     for n in self.nodes_set
