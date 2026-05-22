@@ -409,7 +409,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 def compute_depth_level(blk, n):
                     return (
                         blk.selected_depth_level
-                        >= int(np.ceil(np.log2(n + 1)) - 1) * blk.select_node[n]
+                        >= int(np.ceil(np.log2(n + 1))) * blk.select_node[n]
                     )
 
                 return self.selected_depth_level
@@ -436,7 +436,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         )
 
         @self.Constraint(self.select_depth.index_set())
-        def ordering_select_depth_varaibles(blk, d):
+        def ordering_select_depth_variables(blk, d):
             if d == 1:
                 return Constraint.Skip
 
@@ -699,13 +699,15 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 >= self.min_tree_size
             )
 
-    def constrain_sse(self, sse_max: float):
+    def constrain_sse(self, sse_max: float, relative_tolerance: float = 0.0):
         """Adds a constraint to set an upper bound on SSE"""
         self.max_sse = sse_max
+        self.sse_relative_tolerance = relative_tolerance
 
         if not hasattr(self, "sse_constraint"):
             self.max_sse_constraint = Constraint(
-                expr=self.sum_square_residual <= self.max_sse
+                expr=self.sum_square_residual
+                <= self.max_sse + self.max_sse * self.sse_relative_tolerance
             )
 
     def relax_integrality_constraints(self):
