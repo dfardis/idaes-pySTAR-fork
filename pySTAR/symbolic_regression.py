@@ -292,6 +292,76 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 expr=sum(self.select_node[n] for n in self.nodes_set)
             )
             return
+
+        if objective_type == "operators":
+            # build number of operators objective
+            self.operators_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+            )
+            return
+
+        if objective_type == "wtd_operators":
+            # build weighted operators objective
+            self.wtd_operators_obj = pyo.Objective(
+                expr=sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+            )
+            return
+
+        if objective_type == "csts":
+            # build number of constants objective
+            self.csts_obj = pyo.Objective(
+                expr=sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
+        if objective_type == "complex_ops":
+            # build number of complex operators (exp, log, sqrt, div) objective
+            _complex_ops = [
+                op for op in ["exp", "log", "sqrt", "div"] if op in self.operators_set
+            ]
+            self.complex_operators_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in _complex_ops
+                )
+            )
+            return
+
+        if objective_type == "operations_no_cst":
+            # build operators minus constants objective:
+            # penalizes number of operators but not operations involving constants
+            self.operators_no_cst_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+                - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
+        if objective_type == "wtd_operations_no_csts":
+            # build weighted operators minus constants objective:
+            # penalizes operators by weight but not operations involving constants
+            self.wtd_operations_no_csts_obj = pyo.Objective(
+                expr=sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+                - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
         # Defining an auxiliary variable for SSE for convenience
         # Note that y = y_data_1 is a valid/feasible expression. The SSE
         # value corresponding to this expression is used as an upper bound and
@@ -417,6 +487,32 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             case "depth_new":
                 self._add_depth_level_variables()
                 return sum(self.select_depth.values())
+
+            case "complex_ops":
+                complex_ops = [
+                    op
+                    for op in ["exp", "log", "sqrt", "div"]
+                    if op in self.operators_set
+                ]
+                return sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in complex_ops
+                )
+
+            case "operations_no_cst":
+                return sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                ) - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+
+            case "wtd_operations_no_csts":
+                return sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                ) - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
 
             case _:
                 raise ValueError(f"Unrecognized penalty type {penalty}")
