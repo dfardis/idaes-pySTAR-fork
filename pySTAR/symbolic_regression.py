@@ -292,6 +292,76 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 expr=sum(self.select_node[n] for n in self.nodes_set)
             )
             return
+
+        if objective_type == "operators":
+            # build number of operators objective
+            self.operators_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+            )
+            return
+
+        if objective_type == "wtd_operators":
+            # build weighted operators objective
+            self.wtd_operators_obj = pyo.Objective(
+                expr=sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+            )
+            return
+
+        if objective_type == "csts":
+            # build number of constants objective
+            self.csts_obj = pyo.Objective(
+                expr=sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
+        if objective_type == "complex_ops":
+            # build number of complex operators (exp, log, sqrt, div) objective
+            _complex_ops = [
+                op for op in ["exp", "log", "sqrt", "div"] if op in self.operators_set
+            ]
+            self.complex_operators_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in _complex_ops
+                )
+            )
+            return
+
+        if objective_type == "op_no_cst":
+            # build operators minus constants objective:
+            # penalizes number of operators but not operations involving constants
+            self.operators_no_cst_obj = pyo.Objective(
+                expr=sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+                - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
+        if objective_type == "wtd_op_no_cst":
+            # build weighted operators minus constants objective:
+            # penalizes operators by weight but not operations involving constants
+            self.wtd_operations_no_csts_obj = pyo.Objective(
+                expr=sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                )
+                - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+            )
+            return
+
         # Defining an auxiliary variable for SSE for convenience
         # Note that y = y_data_1 is a valid/feasible expression. The SSE
         # value corresponding to this expression is used as an upper bound and
@@ -311,11 +381,10 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         )
 
         if objective_type.startswith("mse_"):
-
+            # Add constraint to ensure that the denominator of MSE is positive
             self.mse_complexity_limit = Constraint(
                 expr=self._get_penalization_expression(objective_type[4:])
                 <= self.num_data_pts - 2,
-                doc="Constrains denominator of MSE to be positive",
             )
 
             # build MSE objective with complexity penalized
@@ -340,6 +409,12 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             return
 
         if objective_type.startswith("aic_cor_"):
+            # Add constraint to ensure that the denominator of AICc is positive
+            self.aicc_complexity_limit = Constraint(
+                expr=self._get_penalization_expression(objective_type[8:])
+                <= self.num_data_pts - 2,
+            )
+
             # Build corrected AIC objective
             # Supported options: "nodes", "depth", "depth_new", "csts", "wtd_operators", "operators"
             penalty = self._get_penalization_expression(objective_type[8:])
@@ -404,7 +479,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 def compute_depth_level(blk, n):
                     return (
                         blk.selected_depth_level
-                        >= int(np.ceil(np.log2(n + 1)) - 1) * blk.select_node[n]
+                        >= int(np.ceil(np.log2(n + 1))) * blk.select_node[n]
                     )
 
                 return self.selected_depth_level
@@ -412,6 +487,32 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             case "depth_new":
                 self._add_depth_level_variables()
                 return sum(self.select_depth.values())
+
+            case "complex_ops":
+                complex_ops = [
+                    op
+                    for op in ["exp", "log", "sqrt", "div"]
+                    if op in self.operators_set
+                ]
+                return sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in complex_ops
+                )
+
+            case "op_no_cst":
+                return sum(
+                    self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                ) - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
+
+            case "wtd_op_no_cst":
+                return sum(
+                    OPERATOR_WEIGHTS[op] * self.select_operator[n, op]
+                    for n in self.nodes_set
+                    for op in self.operators_set
+                ) - sum(self.select_operator[n, "cst"] for n in self.nodes_set)
 
             case _:
                 raise ValueError(f"Unrecognized penalty type {penalty}")
@@ -431,7 +532,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         )
 
         @self.Constraint(self.select_depth.index_set())
-        def ordering_select_depth_varaibles(blk, d):
+        def ordering_select_depth_variables(blk, d):
             if d == 1:
                 return Constraint.Skip
 
@@ -588,6 +689,88 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                     <= blk.select_node[n]
                 )
 
+    def add_partial_sampling(self, dataset: pd.DataFrame):
+        """
+        For a set of external (non-training) samples, creates val_node variables
+        and adds sqrt non-negativity, sqrt parent non-negativity, div avoid-zero,
+        and log avoid-zero constraints. The dataset columns must match the
+        internally renamed input columns (x1, x2, ...).
+        """
+        sample_indices = dataset.index.to_list()
+        vlb = self.var_bounds["lb"]
+
+        # Rename dataset columns to match internal names (x1, x2, ...)
+        # regardless of what column names the CSV was saved with
+        internal_cols = self.input_data_ref.columns.tolist()  # ['x1', 'x2', ...]
+        dataset = dataset.iloc[:, : len(internal_cols)].copy()
+        dataset.columns = internal_cols
+
+        # Create val_node variables for the partial samples
+        # pylint: disable = attribute-defined-outside-init
+        self.partial_val_node = pyo.Var(
+            sample_indices,
+            self.nodes_set,
+            bounds=(self.var_bounds["lb"], self.var_bounds["ub"]),
+            doc="Value at each node for partial samples",
+        )
+
+        # Value-bounding constraints (mirrors BigmSampleBlock value_upper/lower_bound_constraint)
+        @self.Constraint(sample_indices, self.nodes_set)
+        def partial_value_upper_bound_constraint(blk, s, n):
+            data = dataset.loc[s]
+            return blk.partial_val_node[s, n] <= blk.constant_val[n] + sum(
+                data[op] * blk.select_operator[n, op]
+                for op in blk.operands_set
+                if op != "cst"
+            ) + blk.var_bounds["ub"] * sum(
+                blk.select_operator[n, op] for op in blk.operators_set
+            )
+
+        @self.Constraint(sample_indices, self.nodes_set)
+        def partial_value_lower_bound_constraint(blk, s, n):
+            data = dataset.loc[s]
+            return blk.partial_val_node[s, n] >= blk.constant_val[n] + sum(
+                data[op] * blk.select_operator[n, op]
+                for op in blk.operands_set
+                if op != "cst"
+            ) + blk.var_bounds["lb"] * sum(
+                blk.select_operator[n, op] for op in blk.operators_set
+            )
+
+        if "sqrt" in self.unary_operators_set:
+
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_sqrt_non_negativity_constraint(blk, s, n):
+                return (
+                    blk.partial_val_node[s, 2 * n + 1]
+                    >= (1 - blk.select_operator[n, "sqrt"]) * vlb
+                )
+
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_sqrt_non_negativity_constraint_parent(blk, s, n):
+                return (
+                    blk.partial_val_node[s, n]
+                    >= (1 - blk.select_operator[n, "sqrt"]) * vlb
+                )
+
+        if "div" in self.binary_operators_set:
+
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_div_avoid_zero_constraint(blk, s, n):
+                return (
+                    blk.partial_val_node[s, 2 * n + 1] ** 2
+                    >= blk.select_operator[n, "div"] - 1 + blk.eps_value
+                )
+
+        if "log" in self.unary_operators_set:
+
+            @self.Constraint(sample_indices, self.non_terminal_nodes_set)
+            def partial_log_avoid_zero_constraint(blk, s, n):
+                return (
+                    blk.select_operator[n, "log"] * blk.partial_val_node[s, 2 * n + 1]
+                    >= blk.select_operator[n, "log"] - 1 + blk.eps_value
+                )
+
     def constrain_max_tree_size(self, size: int):
         """Adds a constraint to constrain the maximum size of the tree"""
         self.max_tree_size = size
@@ -612,13 +795,15 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 >= self.min_tree_size
             )
 
-    def constrain_sse(self, sse_max: float):
+    def constrain_sse(self, sse_max: float, relative_tolerance: float = 0.0):
         """Adds a constraint to set an upper bound on SSE"""
         self.max_sse = sse_max
+        self.sse_relative_tolerance = relative_tolerance
 
         if not hasattr(self, "sse_constraint"):
             self.max_sse_constraint = Constraint(
-                expr=self.sum_square_residual <= self.max_sse
+                expr=self.sum_square_residual
+                <= self.max_sse + self.max_sse * self.sse_relative_tolerance
             )
 
     def relax_integrality_constraints(self):
