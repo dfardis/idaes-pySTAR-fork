@@ -9,6 +9,8 @@ from pyomo.core.base.block import BlockData, declare_custom_block
 from pyomo.environ import Var, Constraint
 import pyomo.environ as pyo
 
+from relaxations import mccormick_envelopes, outer_approximation
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -154,7 +156,11 @@ class MultOperatorData(BaseOperatorData):
         self.add_bound_constraints()
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        mccormick_envelopes(
+            blk=self, z=self.val_node, x=self.val_left_node, y=self.val_right_node
+        )
 
     @staticmethod
     def compute_node_value(left_child, right_child):
@@ -172,7 +178,11 @@ class DivOperatorData(BaseOperatorData):
         self.add_bound_constraints()
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        mccormick_envelopes(
+            blk=self, z=self.val_left_node, x=self.val_node, y=self.aux_var_right
+        )
 
     @staticmethod
     def compute_node_value(left_child, right_child):
@@ -197,7 +207,26 @@ class SquareOperatorData(BaseOperatorData):
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: x**2,
+            derivative=lambda x: 2 * x,
+            func_type="convex",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=(
+                (
+                    0
+                    if self.val_right_node.lb <= 0 <= self.val_right_node.ub
+                    else min(self.val_right_node.lb**2, self.val_right_node.ub**2)
+                ),
+                max(self.val_right_node.lb**2, self.val_right_node.ub**2),
+            ),
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -218,7 +247,19 @@ class SqrtOperatorData(BaseOperatorData):
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: pyo.sqrt(x),
+            derivative=lambda x: 1 / (2 * pyo.sqrt(x)),
+            func_type="concave",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -250,7 +291,19 @@ class ExpOperatorData(BaseOperatorData):
         )
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: pyo.exp(x),
+            derivative=lambda x: pyo.exp(x),
+            func_type="convex",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -271,7 +324,19 @@ class LogOperatorData(BaseOperatorData):
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.aux_var_right,
+            y=self.val_node,
+            func=lambda x: pyo.log(x),
+            derivative=lambda x: 1 / x,
+            func_type="concave",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
