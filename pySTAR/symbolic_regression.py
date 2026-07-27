@@ -546,7 +546,7 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         def suppress_nodes_based_on_depth(blk, n):
             return blk.select_node[n] <= blk.select_depth[n_to_d_map[n]]
 
-    def add_same_operand_operation_cuts(self):
+    def add_same_operand_operation_cuts(self, use_unit_bound: bool = False):
         """Adds cuts to avoid expressions of type: x + x, x - x, x * x, x / x"""
 
         @self.Constraint(self.non_terminal_nodes_set, self.operands_set)
@@ -555,13 +555,19 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 # Both child nodes cannot take a constant, so skip this case
                 return Constraint.Skip
 
+            # RHS is either 1 or delta_n
+            if use_unit_bound:
+                rhs = 1
+            else:
+                rhs = blk.select_node[n]
+
             # Do not choose the same operand for both the child nodes.
             return (
                 blk.select_operator[2 * n, op] + blk.select_operator[2 * n + 1, op]
-                <= blk.select_node[n]
+                <= rhs
             )
 
-    def add_constant_operation_cuts(self):
+    def add_constant_operation_cuts(self, use_unit_bound: bool = False):
         """
         Adds constraints to remove expressions of type: cst (op_1) (cst (op_2) x1)
         """
@@ -575,15 +581,22 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         @self.Constraint(self.pre_non_terminal_nodes_set, op_list)
         def redundant_cst_operations(blk, n, op1, op2):
             # cst[2 * n] op1[n] (cst[4 * n + 2] op1[2 * n + 1] ....)
+
+            # RHS is either 1 or delta_n
+            if use_unit_bound:
+                rhs = 1
+            else:
+                rhs = blk.select_node[n]
+
             return (
                 blk.select_operator[2 * n, "cst"]
                 + blk.select_operator[4 * n + 2, "cst"]
-                <= 3 * blk.select_node[n]
+                <= 3 * rhs
                 - blk.select_operator[n, op1]
                 - blk.select_operator[2 * n + 1, op2]
             )
 
-    def add_associative_operation_cuts(self):
+    def add_associative_operation_cuts(self, use_unit_bound: bool = False):
         """
         Adds cuts to remove associative operator combinations.
         A + B - C and A - (C - B) are equivalent, so remove former.
@@ -600,20 +613,33 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
         def redundant_associative_operations(blk, n, op1, op2):
             # A + B - C and A - (C - B) are equivalent, so remove former
             # A * (B / C) and A / (C / B) are equivalent, so remove former
+
+            # RHS is either 1 or delta_n
+            if use_unit_bound:
+                rhs = 1
+            else:
+                rhs = blk.select_node[n]
+
             return (
-                blk.select_operator[n, op1] + blk.select_operator[2 * n + 1, op2]
-                <= blk.select_node[n]
+                blk.select_operator[n, op1] + blk.select_operator[2 * n + 1, op2] <= rhs
             )
 
-    def add_inverse_function_composition_cuts(self):
+    def add_inverse_function_composition_cuts(self, use_unit_bound: bool = False):
         """
         Adds cuts to remove composition of inverse functions: exp(log(.)); square(sqrt(.))
         """
 
         def _inverse_function_rule(blk, n, op_1, op_2):
+
+            # RHS is either 1 or delta_n
+            if use_unit_bound:
+                rhs = 1
+            else:
+                rhs = blk.select_node[n]
+
             return (
                 blk.select_operator[n, op_1] + blk.select_operator[2 * n + 1, op_2]
-                <= blk.select_node[n]
+                <= rhs
             )
 
         if "exp" in self.unary_operators_set and "log" in self.unary_operators_set:
@@ -630,18 +656,22 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
                 rule=_inverse_function_rule,
             )
 
-    def add_symmetry_breaking_cuts(self, sample_name=None):
+    def add_symmetry_breaking_cuts(
+        self, sample_name=None, use_unit_bound: bool = False
+    ):
         """Adds cuts to eliminate symmetrical trees from the model"""
         if sample_name is None:
             # If the sample is not specified, apply symmetry breaking
             # cuts to the first sample
             sample_name = self.input_data_ref.iloc[0].name
 
-        self.samples[sample_name].add_symmetry_breaking_cuts()
+        self.samples[sample_name].add_symmetry_breaking_cuts(
+            use_unit_bound=use_unit_bound
+        )
 
-    def add_implication_cuts(self):
+    def add_implication_cuts(self, use_unit_bound: bool = False):
         """
-        Adds cuts to avoid a certain combinations of operators based on the input data
+        Adds cuts to avoid certain combinations of operators based on the input data
         """
         # Avoid division by zero
         near_zero_operands, negative_operands = _get_operand_domains(
@@ -657,9 +687,16 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
             @self.Constraint(self.non_terminal_nodes_set, near_zero_operands)
             def implication_cuts_div_operator(blk, n, op):
+
+                # RHS is either 1 or delta_n
+                if use_unit_bound:
+                    rhs = 1
+                else:
+                    rhs = blk.select_node[n]
+
                 return (
                     blk.select_operator[n, "div"] + blk.select_operator[2 * n + 1, op]
-                    <= blk.select_node[n]
+                    <= rhs
                 )
 
         if len(negative_operands) > 0 and "sqrt" in self.unary_operators_set:
@@ -670,9 +707,16 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
             @self.Constraint(self.non_terminal_nodes_set, negative_operands)
             def implication_cuts_sqrt_operator(blk, n, op):
+
+                # RHS is either 1 or delta_n
+                if use_unit_bound:
+                    rhs = 1
+                else:
+                    rhs = blk.select_node[n]
+
                 return (
                     blk.select_operator[n, "sqrt"] + blk.select_operator[2 * n + 1, op]
-                    <= blk.select_node[n]
+                    <= rhs
                 )
 
         non_positive_operands = list(set(near_zero_operands + negative_operands))
@@ -684,9 +728,16 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
             @self.Constraint(self.non_terminal_nodes_set, non_positive_operands)
             def implication_cuts_log_operator(blk, n, op):
+
+                # RHS is either 1 or delta_n
+                if use_unit_bound:
+                    rhs = 1
+                else:
+                    rhs = blk.select_node[n]
+
                 return (
                     blk.select_operator[n, "log"] + blk.select_operator[2 * n + 1, op]
-                    <= blk.select_node[n]
+                    <= rhs
                 )
 
     def add_partial_sampling(self, dataset: pd.DataFrame):
