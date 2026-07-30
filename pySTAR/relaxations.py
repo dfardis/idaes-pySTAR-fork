@@ -2,7 +2,13 @@ from typing import Callable, Optional
 import pyomo.environ as pyo
 
 
-def mccormick_envelopes(blk: pyo.Block, z: pyo.Var, x: pyo.Var, y: pyo.Var):
+def mccormick_envelopes(
+    blk: pyo.Block,
+    z: pyo.Var,
+    x: pyo.Var,
+    y: pyo.Var,
+    disjunct_var: pyo.Var | None = None,
+):
     # z = x * y
     xlb, xub = x.lb, x.ub
     ylb, yub = y.lb, y.ub
@@ -21,6 +27,9 @@ def mccormick_envelopes(blk: pyo.Block, z: pyo.Var, x: pyo.Var, y: pyo.Var):
             "Variable y should have lower and and upper bounds to construct McCormick relaxation"
         )
 
+    if disjunct_var is None:
+        disjunct_var = 1
+
     # The following constraints are added to the input pyo.Block
     # Counter needed if mccormick_envelopes is called multiple times on the same block
     # if not hasattr(blk, "_mccormick_counter"):
@@ -38,12 +47,20 @@ def mccormick_envelopes(blk: pyo.Block, z: pyo.Var, x: pyo.Var, y: pyo.Var):
     # return constraints
 
     # Linear underestimators
-    blk.mccormick_env_1 = pyo.Constraint(expr=z >= x * ylb + xlb * y - xlb * ylb)
-    blk.mccormick_env_2 = pyo.Constraint(expr=z >= xub * y + x * yub - xub * yub)
+    blk.mccormick_env_1 = pyo.Constraint(
+        expr=z >= x * ylb + xlb * y - xlb * ylb * disjunct_var
+    )
+    blk.mccormick_env_2 = pyo.Constraint(
+        expr=z >= xub * y + x * yub - xub * yub * disjunct_var
+    )
 
     # Linear overestimators
-    blk.mccormick_env_3 = pyo.Constraint(expr=z <= x * yub + xlb * y - xlb * yub)
-    blk.mccormick_env_4 = pyo.Constraint(expr=z <= x * ylb + xub * y - xub * ylb)
+    blk.mccormick_env_3 = pyo.Constraint(
+        expr=z <= x * yub + xlb * y - xlb * yub * disjunct_var
+    )
+    blk.mccormick_env_4 = pyo.Constraint(
+        expr=z <= x * ylb + xub * y - xub * ylb * disjunct_var
+    )
 
     # return [
     #    z >= x * ylb + xlb * y - xlb * ylb,
@@ -69,6 +86,7 @@ def _get_tangency_points(
     num_points: int,
     points: str | list,  # str (e.g. "uniform_x") or specific list of points
     derivative: Optional[Callable] = None,
+    inverse: Optional[Callable] = None,
     func_type: Optional[str] = None,
     y_interval: Optional[tuple] = None,
 ):
@@ -97,12 +115,12 @@ def _get_tangency_points(
         if num_points == 1:
             y_mid = (ylb + yub) / 2
             return [
-                func.inverse(y_mid)
+                inverse(y_mid)
             ]  # the x-image of the y middle point (one-element list)
 
         y_step = (yub - ylb) / (num_points - 1)
         y_coordinates_list = [ylb + i * y_step for i in range(num_points)]
-        x_coordinates_list = [func.inverse(y) for y in y_coordinates_list]
+        x_coordinates_list = [inverse(y) for y in y_coordinates_list]
         return x_coordinates_list
 
     if points == "interval_bisection":
@@ -177,18 +195,38 @@ def outer_approximation(
     y: pyo.Var,
     func: Callable,
     derivative: Callable,
+    inverse: Callable,
     func_type: str,
     num_tangents: int = 5,
     points: str | list = "uniform_x",
     y_interval: Optional[tuple] = None,
+    disjunct_var: pyo.Var | None = None,
 ):
     if func_type == "convex":
         _outer_approximation_convex(
-            blk, x, y, func, derivative, num_tangents, points, y_interval
+            blk,
+            x,
+            y,
+            func,
+            derivative,
+            inverse,
+            num_tangents,
+            points,
+            y_interval,
+            disjunct_var,
         )
     elif func_type == "concave":
         _outer_approximation_concave(
-            blk, x, y, func, derivative, num_tangents, points, y_interval
+            blk,
+            x,
+            y,
+            func,
+            derivative,
+            inverse,
+            num_tangents,
+            points,
+            y_interval,
+            disjunct_var,
         )
     else:
         raise ValueError("Function must either be convex or concave")
@@ -200,16 +238,21 @@ def _outer_approximation_convex(
     y: pyo.Var,
     func: Callable,
     derivative: Callable,
+    inverse: Callable,
     num_tangents: int,
     points: str | list,
     y_interval: Optional[tuple],
+    disjunct_var: pyo.Var | None = None,
 ):
     xlb, xub = x.lb, x.ub
+
+    if disjunct_var is None:
+        disjunct_var = 1
 
     # Secant as linear overestimator
     secant_slope = (func(xub) - func(xlb)) / (xub - xlb)
     blk.linear_overestimator = pyo.Constraint(
-        expr=y <= secant_slope * (x - xlb) + func(xlb)
+        expr=y <= secant_slope * (x - xlb) + func(xlb) * disjunct_var
     )
 
     # A number of tangents as linear underestimators
@@ -220,13 +263,15 @@ def _outer_approximation_convex(
         num_points=num_tangents,
         points=points,
         y_interval=y_interval,
+        inverse=inverse,
+        derivative=derivative,
     )
 
     @blk.Constraint(tangency_points)
     def linear_underestimators(_, x0):
         tangent_slope = derivative(x0)
         tangent_intercept = func(x0) - tangent_slope * x0
-        return y >= tangent_slope * x + tangent_intercept
+        return y >= tangent_slope * x + tangent_intercept * disjunct_var
 
 
 def _outer_approximation_concave(
@@ -235,17 +280,22 @@ def _outer_approximation_concave(
     y: pyo.Var,
     func: Callable,
     derivative: Callable,
+    inverse: Callable,
     num_tangents: int,
     points: str | list,
     y_interval: Optional[tuple],
+    disjunct_var: pyo.Var | None = None,
 ):
 
     xlb, xub = x.lb, x.ub
 
+    if disjunct_var is None:
+        disjunct_var = 1
+
     # Secant as linear underestimator
     secant_slope = (func(xub) - func(xlb)) / (xub - xlb)
     blk.linear_underestimator = pyo.Constraint(
-        expr=y >= secant_slope * (x - xlb) + func(xlb)
+        expr=y >= secant_slope * (x - xlb) + func(xlb) * disjunct_var
     )
 
     # A number of tangents as linear overestimators
@@ -262,4 +312,4 @@ def _outer_approximation_concave(
     def linear_overestimators(_, x0):
         tangent_slope = derivative(x0)
         tangent_intercept = func(x0) - tangent_slope * x0
-        return y <= tangent_slope * x + tangent_intercept
+        return y <= tangent_slope * x + tangent_intercept * disjunct_var

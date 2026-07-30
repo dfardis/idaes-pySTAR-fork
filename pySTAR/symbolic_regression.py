@@ -869,7 +869,13 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
 
     def relax_nonconvex_constraints(self):
         """Convexifies all non-convex nonlinear constraints"""
-        raise NotImplementedError("Model Convexification is not currently supported")
+        if self.model_type == "bigm"
+            raise ValueError("Model type should be hull. MINLP cannot be convexified if big-m constraints are used.")
+
+        from hull_operators import BaseOperatorData
+        for blk in self.component_data_objects(pyo.Block):
+            if isinstance(blk, BaseOperatorData):
+                blk.construct_convex_relaxation()
 
     def get_selected_operators(self):
         """
