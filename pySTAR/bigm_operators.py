@@ -545,7 +545,7 @@ class BigmSampleBlockData(BlockData):
         )
         self.square_of_residual = pyo.Expression(expr=self.residual**2)
 
-    def add_symmetry_breaking_cuts(self):
+    def add_symmetry_breaking_cuts(self, use_unit_bound: bool = False):
         """Adds symmetry breaking cuts to the sample"""
         srm = self.symbolic_regression_model
         vlb, vub = srm.var_bounds["lb"], srm.var_bounds["ub"]
@@ -555,9 +555,15 @@ class BigmSampleBlockData(BlockData):
 
         @self.Constraint(srm.non_terminal_nodes_set)
         def symmetry_breaking_constraints(blk, n):
+
+            # RHS is either 1 or delta_n
+            if use_unit_bound:
+                rhs = 1
+            else:
+                rhs = srm.select_node[n]
+
             return (blk.val_node[2 * n] - blk.val_node[2 * n + 1]) >= (vlb - vub) * (
-                srm.select_node[n]
-                - sum(srm.select_operator[n, op] for op in symmetric_operators)
+                rhs - sum(srm.select_operator[n, op] for op in symmetric_operators)
             )
 
     def compare_node_values(self):

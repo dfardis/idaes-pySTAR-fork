@@ -9,6 +9,8 @@ from pyomo.core.base.block import BlockData, declare_custom_block
 from pyomo.environ import Var, Constraint
 import pyomo.environ as pyo
 
+from relaxations import mccormick_envelopes, outer_approximation
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -51,7 +53,10 @@ class BaseOperatorData(BlockData):
             # Declare an auxiliary variable for operators with singularity issue
             self.aux_var_right = Var(
                 doc="Auxiliary variable for the right child",
-                bounds=(eps, max(1, ub)),  # Ensure that the RHS is strictly positive
+                bounds=(
+                    max(eps, lb),
+                    max(1, ub),
+                ),  # Ensure that the RHS is strictly positive
             )
 
             # Ensure that aux_var_right = (val_right_node if bin_var = 1 else 1)
@@ -154,7 +159,15 @@ class MultOperatorData(BaseOperatorData):
         self.add_bound_constraints()
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        mccormick_envelopes(
+            blk=self,
+            z=self.val_node,
+            x=self.val_left_node,
+            y=self.val_right_node,
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(left_child, right_child):
@@ -172,7 +185,15 @@ class DivOperatorData(BaseOperatorData):
         self.add_bound_constraints()
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        mccormick_envelopes(
+            blk=self,
+            z=self.val_left_node,
+            x=self.val_node,
+            y=self.aux_var_right,
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(left_child, right_child):
@@ -197,7 +218,28 @@ class SquareOperatorData(BaseOperatorData):
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: x**2,
+            derivative=lambda x: 2 * x,
+            inverse=lambda y: pyo.sqrt(y),
+            func_type="convex",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=(
+                (
+                    0
+                    if self.val_right_node.lb <= 0 <= self.val_right_node.ub
+                    else min(self.val_right_node.lb**2, self.val_right_node.ub**2)
+                ),
+                max(self.val_right_node.lb**2, self.val_right_node.ub**2),
+            ),
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -214,11 +256,30 @@ class SqrtOperatorData(BaseOperatorData):
         )
 
         # val_right_node must be non-negative in this case
-        self.val_right_node.setlb(0)
+        self.val_right_node.setlb(
+            max(
+                pyo.value(self.symbolic_regression_model.eps_value),
+                self.val_right_node.lb,
+            )
+        )
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: pyo.sqrt(x),
+            derivative=lambda x: 1 / (2 * pyo.sqrt(x)),
+            inverse=lambda y: y**2,
+            func_type="concave",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -235,7 +296,7 @@ class ExpOperatorData(BaseOperatorData):
         ub_val_right_node = self.val_right_node.ub
 
         self.val_right_node.setub(min(pyo.log(ub_val_node), ub_val_right_node))
-        self.val_node.setlb(0)
+        self.val_node.setlb(max(0, self.val_node.lb))
 
         # To avoid numerical issues, we do not let the lower bound of the
         # argument of the exp function go below -10
@@ -250,7 +311,21 @@ class ExpOperatorData(BaseOperatorData):
         )
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.val_right_node,
+            y=self.val_node,
+            func=lambda x: pyo.exp(x),
+            derivative=lambda x: pyo.exp(x),
+            inverse=lambda y: pyo.log(y),
+            func_type="convex",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
@@ -271,7 +346,21 @@ class LogOperatorData(BaseOperatorData):
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
-        raise NotImplementedError()
+        self.evaluate_val_node.deactivate()
+
+        outer_approximation(
+            blk=self,
+            x=self.aux_var_right,
+            y=self.val_node,
+            func=lambda x: pyo.log(x),
+            derivative=lambda x: 1 / x,
+            inverse=lambda y: pyo.exp(y),
+            func_type="concave",
+            num_tangents=5,
+            points="uniform_x",
+            y_interval=None,
+            disjunct_var=self._bin_var_ref,
+        )
 
     @staticmethod
     def compute_node_value(_, right_child):
