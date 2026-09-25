@@ -69,6 +69,49 @@ def mccormick_envelopes(
     #    z <= x * ylb + xub * y - xub * ylb,
     # ]
 
+def mccormick_envelopes_aux(
+    blk: pyo.Block,
+    z: pyo.Var,
+    x: pyo.Var,
+    y: pyo.Var,
+    disjunct_var: pyo.Var | None = None,
+):
+    # z = x * y
+    xlb, xub = x.lb, x.ub
+    ylb, yub = y.lb, y.ub
+    zlb, zub = (
+        z.lb,
+        z.ub,
+    )  # needed for modeling convex relaxation for z = x/y => x = z*y
+
+    if xlb is None or xub is None:
+        raise ValueError(
+            "Variable x should have lower and and upper bounds to construct McCormick relaxation"
+        )
+
+    if ylb is None or yub is None:
+        raise ValueError(
+            "Variable y should have lower and and upper bounds to construct McCormick relaxation"
+        )
+
+    if disjunct_var is None:
+        disjunct_var = 1
+
+    # Linear underestimators
+    blk.mccormick_env_1 = pyo.Constraint(
+        expr=z >= x * ylb + xlb * (y-1+disjunct_var) - xlb * ylb * disjunct_var
+    )
+    blk.mccormick_env_2 = pyo.Constraint(
+        expr=z >= xub * (y-1+disjunct_var) + x * yub - xub * yub * disjunct_var
+    )
+
+    # Linear overestimators
+    blk.mccormick_env_3 = pyo.Constraint(
+        expr=z <= x * yub + xlb * (y-1+disjunct_var) - xlb * yub * disjunct_var
+    )
+    blk.mccormick_env_4 = pyo.Constraint(
+        expr=z <= x * ylb + xub * (y-1+disjunct_var) - xub * ylb * disjunct_var
+    )
 
 ### Outer Approximation
 # Returns the range of convex/concave functions (to be used when generating tangents with uniform y-spacing)
@@ -231,6 +274,20 @@ def outer_approximation(
             disjunct_var,
             tangent_interval,
         )
+    elif func_type == "concave_aux":
+        _outer_approximation_concave_aux(
+            blk,
+            x,
+            y,
+            func,
+            derivative,
+            inverse,
+            num_tangents,
+            points,
+            y_interval,
+            disjunct_var,
+            tangent_interval,
+        )        
     else:
         raise ValueError("Function must either be convex or concave")
 
@@ -322,3 +379,46 @@ def _outer_approximation_concave(
         tangent_slope = derivative(x0)
         tangent_intercept = func(x0) - tangent_slope * x0
         return y <= tangent_slope * x + tangent_intercept * disjunct_var
+
+def _outer_approximation_concave_aux(
+    blk: pyo.Block,
+    x: pyo.Var,
+    y: pyo.Var,
+    func: Callable,
+    derivative: Callable,
+    inverse: Callable,
+    num_tangents: int,
+    points: str | list,
+    y_interval: Optional[tuple],
+    disjunct_var: pyo.Var | None = None,
+    tangent_interval: Optional[tuple] = None,
+):
+
+    xlb, xub = x.lb, x.ub
+
+    if disjunct_var is None:
+        disjunct_var = 1
+
+    # Secant as linear underestimator
+    secant_slope = (func(xub) - func(xlb)) / (xub - xlb)
+    blk.linear_underestimator = pyo.Constraint(
+        expr=y >= secant_slope * (x - 1 + disjunct_var - xlb) + func(xlb) * disjunct_var
+    )
+
+    tangent_xlb, tangent_xub = tangent_interval if tangent_interval is not None else (xlb, xub)
+
+    # A number of tangents as linear overestimators
+    tangency_points = _get_tangency_points(
+        func=func,
+        xlb=tangent_xlb,
+        xub=tangent_xub,
+        num_points=num_tangents,
+        points=points,
+        y_interval=y_interval,
+    )
+
+    @blk.Constraint(tangency_points)
+    def linear_overestimators(_, x0):
+        tangent_slope = derivative(x0)
+        tangent_intercept = func(x0) - tangent_slope * x0
+        return y <= tangent_slope * (x - 1 + disjunct_var) + tangent_intercept * disjunct_var
