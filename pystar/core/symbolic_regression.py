@@ -1,5 +1,6 @@
 from itertools import product
 import logging
+import math
 from typing import List, Optional
 import numpy as np
 import pandas as pd
@@ -668,6 +669,175 @@ class SymbolicRegressionModel(pyo.ConcreteModel):
             return (
                 blk.select_operator[n, op1] + blk.select_operator[2 * n + 1, op2] <= rhs
             )
+
+    def add_similar_operation_cuts(self, use_unit_bound: bool = False):
+        """
+        In general prefer: 1) less restrictive forms of domains of arguments
+        2) forms requiring fewer nodes/operators
+        3) forms not contradicting symmetry-breaking constraints
+        
+        Warning: some feasible solutions might be pruned due to bounds violation,
+        same issue with associative operation constraints.
+
+        exp(A) * exp(B) and exp(A + B) are equivalent, so remove former.
+        exp(A) / exp(B) and exp(A - B) are equivalent, so remove former.
+
+        square(A) * square(B) and square(A * B) are equivalent, so remove former.
+        square(A) / square(B) and square(A / B) are equivalent, so remove former.
+        sqrt(A) * sqrt(B) and sqrt(A * B) are equivalent, so remove former.
+        sqrt(A) / sqrt(B) and sqrt(A / B) are equivalent, so remove former.
+
+        log(A) + log(B) and log(A*B) are equivalent, so remove former. 
+        log(A) - log(B) and log(A/B) are equivalent, so remove former.
+        Keep both log(A^2) and 2*log(A). (no constraint added)
+        log(sqrt(A)) and 0.5*log(A) are equivalent, so remove former.
+
+        Extended associative:
+        (A/B)/(C/D) and (A*D)/(B*C) and (A/B)*(D/C) are equivalent, so remove 2nd. 3rd already removed by associative
+        (A-B)-(C-D) and (A+D)-(B+C) and (A-B)+(D-C) are equivalent, so remove 2nd. 3rd already removed by associative.
+        """
+
+        if "mult" in self.binary_operators_set and "sum" in self.binary_operators_set and "exp" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_exp(blk, n):
+                # exp(A) * exp(B) and exp(A + B) are equivalent, so remove former
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "mult"] + blk.select_operator[2 * n, "exp"] + blk.select_operator[2 * n + 1, "exp"] <= 2* rhs
+                )
+
+        if (
+            "div" in self.binary_operators_set
+            and "diff" in self.binary_operators_set
+            and "exp" in self.unary_operators_set
+        ):
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_exp_div(blk, n):
+                # Replace exp(A) / exp(B) with exp(A - B).
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "div"]
+                    + blk.select_operator[2 * n, "exp"]
+                    + blk.select_operator[2 * n + 1, "exp"]
+                    <= 2 * rhs
+                )
+
+        if "mult" in self.binary_operators_set and "square" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_square_mult(blk, n):
+                # Replace square(A) * square(B) with square(A * B).
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "mult"]
+                    + blk.select_operator[2 * n, "square"]
+                    + blk.select_operator[2 * n + 1, "square"]
+                    <= 2 * rhs
+                )
+
+        if "div" in self.binary_operators_set and "square" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_square_div(blk, n):
+                # Replace square(A) / square(B) with square(A / B).
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "div"]
+                    + blk.select_operator[2 * n, "square"]
+                    + blk.select_operator[2 * n + 1, "square"]
+                    <= 2 * rhs
+                )
+
+        if "mult" in self.binary_operators_set and "sqrt" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_sqrt_mult(blk, n):
+                # Replace sqrt(A) * sqrt(B) with sqrt(A * B).
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "mult"]
+                    + blk.select_operator[2 * n, "sqrt"]
+                    + blk.select_operator[2 * n + 1, "sqrt"]
+                    <= 2 * rhs
+                )
+
+        if "div" in self.binary_operators_set and "sqrt" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_sqrt_div(blk, n):
+                # Replace sqrt(A) / sqrt(B) with sqrt(A / B).
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "div"]
+                    + blk.select_operator[2 * n, "sqrt"]
+                    + blk.select_operator[2 * n + 1, "sqrt"]
+                    <= 2 * rhs
+                )
+
+        if "sum" in self.binary_operators_set and "mult" in self.binary_operators_set and "log" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_log(blk, n):
+                # log(A) + log(B) and log(A*B) are equivalent, so remove former
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "sum"] + blk.select_operator[2 * n, "log"] + blk.select_operator[2 * n + 1, "log"] <= 2* rhs
+                )
+
+        if "diff" in self.binary_operators_set and "div" in self.binary_operators_set and "log" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_log_diff(blk, n):
+                # log(A) - log(B) and log(A/B) are equivalent, so remove former
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "diff"] + blk.select_operator[2 * n, "log"] + blk.select_operator[2 * n + 1, "log"] <= 2* rhs
+                )
+
+        if "mult" in self.binary_operators_set and "sqrt" in self.unary_operators_set and "log" in self.unary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_log_sqrt(blk, n):
+                # log(sqrt(A)) and 0.5*log(A) are equivalent, so remove former.
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "log"] + blk.select_operator[2 * n + 1, "sqrt"] <= rhs
+                )   
+
+        if "div" in self.binary_operators_set and "mult" in self.binary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_div(blk, n):
+                # (A/B)/(C/D) and (A*D)/(B*C) and (A/B)*(D/C) are equivalent, so remove 2nd
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "div"] + blk.select_operator[2 * n, "mult"] + blk.select_operator[2 * n + 1, "mult"] <= 2* rhs
+                )
+
+        if "sum" in self.binary_operators_set and "diff" in self.binary_operators_set:
+            @self.Constraint(self.pre_non_terminal_nodes_set)
+            def redundant_similar_operations_diff(blk, n):
+                # (A-B)-(C-D) and (A+D)-(B+C) and (A-B)+(D-C) are equivalent, so remove 2nd
+
+                # RHS is either 1 or delta_n
+                rhs = 1 if use_unit_bound else blk.select_node[n]
+
+                return (
+                    blk.select_operator[n, "diff"] + blk.select_operator[2 * n, "sum"] + blk.select_operator[2 * n + 1, "sum"] <= 2* rhs
+                )
+           
 
     def add_inverse_function_composition_cuts(self, use_unit_bound: bool = False):
         """
