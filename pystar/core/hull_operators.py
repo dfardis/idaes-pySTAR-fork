@@ -8,8 +8,9 @@ import pandas as pd
 from pyomo.core.base.block import BlockData, declare_custom_block
 from pyomo.environ import Var, Constraint
 import pyomo.environ as pyo
+from pyomo.contrib.fbbt.fbbt import fbbt
 
-from pystar.core.relaxations import mccormick_envelopes, outer_approximation
+from pystar.core.relaxations import mccormick_envelopes, mccormick_envelopes_aux, outer_approximation
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,16 +51,17 @@ class BaseOperatorData(BlockData):
             self.val_left_node.fix(0)
 
         if self._define_aux_var_right:
-            # Declare an auxiliary variable for operators with singularity issue
+            # Declare an auxiliary variable (ranging between 0 and 1) for operators with singularity issue
             self.aux_var_right = Var(
                 doc="Auxiliary variable for the right child",
                 bounds=(
-                    max(eps, lb),
+                    (eps if lb < eps else min(lb, 1)),
                     max(1, ub),
                 ),  # Ensure that the RHS is strictly positive
             )
 
             # Ensure that aux_var_right = (val_right_node if bin_var = 1 else 1)
+            # If bin_var = 0, then val_right_node = 0 and thus aux_var_right = 1
             self.calculate_aux_var_right = Constraint(
                 expr=self.aux_var_right == self.val_right_node + 1 - bin_var
             )
@@ -179,15 +181,19 @@ class DivOperatorData(BaseOperatorData):
     _define_aux_var_right = True
 
     def build_operator_model(self):
+
+        self.val_right_node.setlb(max(0, self.val_right_node.lb))
+
         self.evaluate_val_node = Constraint(
             expr=self.val_node * self.aux_var_right == self.val_left_node
         )
+        fbbt(self.evaluate_val_node)
         self.add_bound_constraints()
 
     def construct_convex_relaxation(self):
         self.evaluate_val_node.deactivate()
 
-        mccormick_envelopes(
+        mccormick_envelopes_aux(
             blk=self,
             z=self.val_left_node,
             x=self.val_node,
@@ -210,9 +216,7 @@ class SquareOperatorData(BaseOperatorData):
         self.evaluate_val_node = Constraint(
             expr=self.val_node == self.val_right_node * self.val_right_node
         )
-
-        # val_node will be non-negative in this case, so update lb
-        self.val_node.setlb(0)
+        fbbt(self.evaluate_val_node)
 
         # For unary operator, left node is fixed to zero.
         self.add_bound_constraints(val_left_node=False)
@@ -254,14 +258,7 @@ class SqrtOperatorData(BaseOperatorData):
         self.evaluate_val_node = Constraint(
             expr=self.val_node == pyo.sqrt(self.val_right_node)
         )
-
-        # val_right_node must be non-negative in this case
-        self.val_right_node.setlb(
-            max(
-                pyo.value(self.symbolic_regression_model.eps_value),
-                self.val_right_node.lb,
-            )
-        )
+        fbbt(self.evaluate_val_node)
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
@@ -279,6 +276,10 @@ class SqrtOperatorData(BaseOperatorData):
             points="uniform_x",
             y_interval=None,
             disjunct_var=self._bin_var_ref,
+            tangent_interval=(
+                max(pyo.value(self.symbolic_regression_model.eps_value), self.val_right_node.lb),
+                max(pyo.value(self.symbolic_regression_model.eps_value), self.val_right_node.ub),
+            ),
         )
 
     @staticmethod
@@ -295,13 +296,18 @@ class ExpOperatorData(BaseOperatorData):
         ub_val_node = self.val_node.ub
         ub_val_right_node = self.val_right_node.ub
 
-        self.val_right_node.setub(min(pyo.log(ub_val_node), ub_val_right_node))
         self.val_node.setlb(max(0, self.val_node.lb))
 
         # To avoid numerical issues, we do not let the lower bound of the
         # argument of the exp function go below -10
         self.val_right_node.setlb(max(-10, self.val_right_node.lb))
-        self.add_bound_constraints(val_left_node=False)
+
+        self.val_right_node.setub(
+            min(
+                self.val_right_node.ub,
+                max(0, pyo.log(self.val_node.ub)),
+            )
+        )
 
         # If the operator is not chosen, then val_right_node = 0,
         # exp(val_right_node) = 1. So, we add (bin_var - 1) to make the
@@ -309,6 +315,9 @@ class ExpOperatorData(BaseOperatorData):
         self.evaluate_val_node = Constraint(
             expr=self.val_node == pyo.exp(self.val_right_node) + self._bin_var_ref - 1
         )
+        fbbt(self.evaluate_val_node)
+
+        self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
         self.evaluate_val_node.deactivate()
@@ -316,7 +325,7 @@ class ExpOperatorData(BaseOperatorData):
         outer_approximation(
             blk=self,
             x=self.val_right_node,
-            y=self.val_node,
+            y=self.val_node + 1 - self._bin_var_ref,
             func=lambda x: pyo.exp(x),
             derivative=lambda x: pyo.exp(x),
             inverse=lambda y: pyo.log(y),
@@ -338,11 +347,14 @@ class LogOperatorData(BaseOperatorData):
     _define_aux_var_right = True
 
     def build_operator_model(self):
+
+        self.val_right_node.setlb(max(0, self.val_right_node.lb))
+        
         # If the operator is not selected, aux_var_right = 1, so log vanishes
         self.evaluate_val_node = Constraint(
             expr=self.val_node == pyo.log(self.aux_var_right)
         )
-
+        fbbt(self.evaluate_val_node)
         self.add_bound_constraints(val_left_node=False)
 
     def construct_convex_relaxation(self):
@@ -355,7 +367,7 @@ class LogOperatorData(BaseOperatorData):
             func=lambda x: pyo.log(x),
             derivative=lambda x: 1 / x,
             inverse=lambda y: pyo.exp(y),
-            func_type="concave",
+            func_type="concave_aux",
             num_tangents=5,
             points="uniform_x",
             y_interval=None,
@@ -451,7 +463,7 @@ class HullSampleBlockData(BlockData):
         )
         self.square_of_residual = pyo.Expression(expr=self.residual**2)
 
-    def add_symmetry_breaking_cuts(self):
+    def add_symmetry_breaking_cuts(self, use_unit_bound: bool = False):
         """Adds symmetry breaking cuts to the sample"""
         srm = self.symbolic_regression_model
         vlb, vub = srm.var_bounds["lb"], srm.var_bounds["ub"]
@@ -461,10 +473,14 @@ class HullSampleBlockData(BlockData):
 
         @self.Constraint(srm.non_terminal_nodes_set)
         def symmetry_breaking_constraints(blk, n):
+
+            # RHS is either 1 or delta_n
+            rhs = 1 if use_unit_bound else srm.select_node[n]
+
             return blk.node[2 * n].val_node - blk.node[2 * n + 1].val_node >= (
                 vlb - vub
             ) * (
-                srm.select_node[n]
+                2*rhs - (1 - srm.select_operator[2*n, "cst"])
                 - sum(srm.select_operator[n, op] for op in symmetric_operators)
             )
 
