@@ -563,7 +563,7 @@ class BigmSampleBlockData(BlockData):
                 rhs = srm.select_node[n]
 
             return (blk.val_node[2 * n] - blk.val_node[2 * n + 1]) >= (vlb - vub) * (
-                2* rhs - (1 - srm.select_operator[2*n, "cst"]) - sum(srm.select_operator[n, op] for op in symmetric_operators)
+                2* rhs - (rhs - srm.select_operator[2*n, "cst"]) - sum(srm.select_operator[n, op] for op in symmetric_operators)
             )
 
     def compare_node_values(self):
